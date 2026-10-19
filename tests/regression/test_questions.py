@@ -10,9 +10,9 @@ from unittest.mock import patch
 import httpx
 
 from llm_judge import Trace, label
-from llm_judge.diagnostics import control_requests, controls
-from llm_judge.jev import validate
-from llm_judge.trace import Decisions, records
+from llm_judge.talk_to_jev import control_requests, controls
+from llm_judge.judge import validate
+from llm_judge.judge import Decisions, records
 
 
 def reply_body(request, cost=.001):
@@ -117,7 +117,7 @@ class Questions(unittest.IsolatedAsyncioTestCase):
 
     async def test_offline_controls_preserve_caller_credentials(self):
         from argparse import Namespace
-        from llm_judge.__main__ import diagnose
+        from llm_judge.judge import diagnose
         with tempfile.TemporaryDirectory() as tmp, patch.dict(os.environ,{'OPENROUTER_API_KEY':'caller-fixture-key'}):
             args = Namespace(output=Path(tmp),offline=True,kind='controls',budget=.01,repeats=2)
             await diagnose(args)
@@ -126,7 +126,7 @@ class Questions(unittest.IsolatedAsyncioTestCase):
 
     async def test_missing_cli_pair_id_fails_with_a_direct_message(self):
         from argparse import Namespace
-        from llm_judge.__main__ import diagnose
+        from llm_judge.judge import diagnose
         with tempfile.TemporaryDirectory() as tmp:
             source = Path(tmp)/'results.jsonl'
             source.write_text('{"id":"existing"}\n')

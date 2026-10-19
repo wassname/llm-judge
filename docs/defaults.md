@@ -1,55 +1,143 @@
-# What each default is for
+# Defaults and their reasons
 
-These are wassname's practical starting points, implemented by PI/OpenAI. Adapt the criterion and check known examples before trusting an evaluation.
+The [README](../README.md) shows how to run a comparison. This page explains what the results mean and which failures the defaults try to expose. They are starting points for research, not a claim that the judge is accurate on your task.
 
-## Distinguish behaviors, not merely scores
+- [Choose a difference to measure](#start-with-a-difference-you-can-check)
+- [Produce and interpret judgments](#ask-for-evidence-before-ratings)
+- [Check position and repeat noise](#check-whether-position-changes-the-verdict)
+- [Read the trace](#read-one-complete-pair-before-the-aggregate)
+- [Understand caching and recovery](#reuse-work-without-counting-it-as-new-evidence)
+- [Choose credentials and models](#choose-credentials-and-a-model-explicitly)
 
-Ask which distributions you need to separate: a genuine decision change, vocabulary mimicry, lost task ability, or a judge responding to length/style. A virtue score alone may fit all four. Add measurements and controls that distinguish those explanations, rather than optimizing an average with unclear meaning.
+## Start with a difference you can check
 
-Ten constant binary labels contain zero bits of variation; ten copies of one balanced bit contain one bit jointly; ten independent balanced bits contain ten bits. Partial correlation is not equivalence. Jev's question isolation is an attention contract, not statistical independence. Variation is useful only insofar as it distinguishes the behavior or hypotheses you care about. A constant judge has low noise and no between-item discrimination.
+Suppose a steered model gets a higher virtue score. Did its decisions change, did it learn virtue-related vocabulary, or did the judge merely prefer longer answers? A single average score can fit all three explanations.
 
-Keep full distributions. `[.5,0,0,0,.5]` and `[0,0,1,0,0]` have the same expected level 2 but describe different uncertainty. Probabilities near 0/1 can discriminate well when they vary between items; saturation matters when the needed distinction disappears. Priors and controls concern the measurement procedure as well as the evaluated model.
+Choose cases that distinguish them: a new decision scenario, an answer containing virtue words without virtuous conduct, and the same decision expressed at different lengths. Also check ordinary task ability and refusal. Write down what each explanation predicts before looking at the scores. Set `criterion=` to the behavior you actually want to compare.
 
-## Evidence before ratings
+Keep stable pair IDs and an identical-answer control. Read a seeded random sample as well as cases selected for disagreement, and record how you selected them. When several rows come from one scenario, analyze those rows as a group rather than independent evidence.
 
-The generative judge explains the comparison, quotes exact answer spans, then rates each answer 0–3 and chooses a preference. This directs attention before the decision, like a checklist. It also makes mistakes inspectable. Substring checks catch invented quotes, not false interpretations. The final setup note is unscored; a prose-only critique does not replace numerical judging.
+### More questions need not mean more information
 
-`both` runs independent procedures on the original inputs, not a generative judge anchored on Jev labels. A later post-label critic is useful, but it answers a different question. Prefer a different model family from the evaluated model and inspect disagreements yourself.
+Ten copies of one balanced yes/no label carry one bit jointly, not ten. A label that never changes carries no variation across items. Conversely, a judge returning .5 for every item expresses uncertainty without distinguishing the items.
 
-## Position controls and repeated draws
+The useful question is what an extra measurement distinguishes *after* you know the existing measurements. Jev's isolation between questions does not guarantee independent errors. Probabilities near 0 or 1 can be useful when they change with the behavior of interest; a skewed histogram alone is not a defect.
 
-Four presentations change nuisances while holding the answers fixed: A/B and B/A crossed with normal/reversed unordered Choice options. Map back to original identity before averaging. This exposes position/option sensitivity; it does not guarantee its removal. Never reverse Score levels because their order defines the scale.
+Keep the vectors as well as their means. Over levels 0–4, `[.5,0,0,0,.5]` and `[0,0,1,0,0]` both have expected score 2. The first splits between extremes; the second puts all probability on the middle. Averaging discards that distinction.
 
-Generative `passes=3` samples each presentation three times, averages within the original pair, then reports standard error across pair means. Related scenarios need grouped uncertainty rather than an independent-pair interpretation. More draws reduce sampling noise, not shared errors. Jev supplies probability vectors and is cached once per presentation; repeat fresh Jev calls only when measuring serving variation. Views and recovery calls do not increase the item count.
+For the fuller information-theory framing, see the [ML-debug measurement guide](https://github.com/wassname/ml-debug/blob/main/references/llm_judges.md#useful-information-redundancy-and-saturation).
 
-All pair scores are original B minus A. Preference is P(B)−P(A), −1..1 (empirical frequencies for the generative judge); Jev comparison is an expected rubric index centered on zero, −2..2; generative quality change is the difference of 0–3 ratings, −3..3. These are different ordinal scales, not interchangeable utilities or P(correct). Refusal/incoherence/repetition/off-topic checks remain separate. Disobedience inside a story is not task refusal.
+## Ask for evidence before ratings
 
-## A small study recipe
+The generative judge follows this order:
 
-Name the distinction before reading the scores: for example, changed decisions versus virtue-word mimicry versus lost task ability. Keep stable pair IDs and include an identical-answer control, a vocabulary-only case, an ordinary quality contrast, and relevant failure cases. Run `compare` with the target criterion, then use `label` on the same material for explicit narrow checks. Keep the full vectors and disagreement cases alongside the means.
+1. Explain the comparison and quote exact spans from each answer.
+2. Rate each answer from 0 to 3, check specific failures, and choose a preference.
+3. Add an unscored note about the judging setup.
 
-Inspect the first full trace and a seeded random sample, plus targeted disagreements. Record how samples were selected. When several rows come from one scenario or source, analyze those groups rather than treating each presentation as independent. Revise the rubric as you learn, record the change, and rerun the same controls. This is an example-level recipe, not another measurement abstraction.
+This is an attention procedure, like a checklist, as well as an audit trail. The code verifies that quotes occur in the answers. That catches invented quotations; it cannot establish that an interpretation is sound.
 
-## Explicit credentials
+With `mode="both"`, Jev and the generative judge see the original inputs, not each other's labels. Their scores remain separate. A critic shown Jev's returned labels answers a different, post-label question and may be influenced by them. Prefer a different model family from the model being evaluated, and inspect disagreements.
 
-Select credentials in the calling environment (or pass an explicit key to `Decisions`). The paired runner disables Inspect's implicit `.env` lookup: otherwise the SDK searches parent directories and can select another project's configuration. This is a scoped guard on the pinned Inspect initialization hook, not a silent fallback. Offline checks use fixture credentials/transports and preserve the caller's environment. Inspect's evaluation context and this scoped hook are process-global; use separate processes for concurrent independent evaluations.
+Implementation: [generative schema, quote checks and recovery](../src/llm_judge/judge.py). For known judge biases and source evidence: [ML-debug judge guide](https://github.com/wassname/ml-debug/blob/main/references/llm_judges.md).
 
-## Durable execution
+## Check whether position changes the verdict
 
-`Trace` appends requests before transport and raw replies/errors before validation, flushes writes, and preserves a torn final JSONL fragment separately on resume. Complete/failed Inspect samples are appended incrementally with the current run ID, including cache replays. The full first pair/state also goes to `run.md`; do not skim just its selected label. Inputs may be sensitive: outputs and credentials are ignored, not published.
+A judge that always chooses the first answer appears to favor A until you swap the answers. To expose this, each pair has four presentations: A/B and B/A, each with normal and reversed unordered answer options.
 
-Caches include exact model/request/schema/order/config, with separate generative epoch entries. Raw cached bodies retain their original usage, while current diagnostic charge accounting treats cache hits and duplicate waiters as zero new spending. A failed in-flight request is removed so the caller can explicitly retry it later. Concurrent duplicate decisions share an in-flight request. A changed rubric misses cache. Model identity is checked across cached/live replies and persisted between reruns. The paired runner archives old aggregates at startup; a failed comparison cannot present a prior successful `results.jsonl` as current. `status.json` marks the current run. Unresolved measurement failures fail the aggregate, not silently drop hard rows.
+Map the verdicts back to the original answer identities **before averaging**. If Paris was originally A but appeared second, a preference for Paris still counts for original A. Keep the order discrepancy alongside the mean; averaging need not remove all bias.
 
-Concurrency defaults to four. Transient HTTP/network failures get bounded backoff/retries; permanent errors fail with the raw body retained. Models are pinned; generative routing requires `deepinfra/fp8`, FP8, requested-parameter support and no fallback. These are concrete route requirements, not evidence that a model is calibrated for your task.
+Reverse unordered Choice options, not ordered Score levels. Reversing “much worse … much better” would change the meaning of the scale rather than just its presentation.
 
-If reasoning reaches the output limit, preserve the provider-returned reasoning and request one structured final answer with reasoning disabled. This cannot finish incomplete reasoning. An unfinished final reply still fails. One malformed JSON/field/quote gets a bounded validation-error retry; keep the invalid reply, never patch scores or invent defaults. Jev vectors tolerate two-decimal total-mass error up to .02 and check score/vector consistency without silently normalizing.
+Implementation in [judge.py](../src/llm_judge/judge.py): `make_request`, `schema`, `measurement_scores` and `discrepancy`. Background: [Wang et al., *Large Language Models are not Fair Evaluators*](https://arxiv.org/abs/2305.17926) and [Jev 1.13 limitations](https://docs.typesafe.ai/model-jaggedness/jev-1.13).
 
-## Additional diagnostics
+### Repeat judgments, not the item count
 
-The normal broad vent is cheap, unscored and enabled by default. It names potential needs beyond the anticipated failures, including data, rubric, harness and supplied code issues. Preserve its full probabilities: warnings can split mass while `none` wins. A content trait is not automatically a bad input.
+For the generative judge, the default `passes=3` samples each presentation three times. Jev-only mode uses one call per presentation and rejects a different `--passes` value rather than replaying cached answers as if they were fresh draws. Ten original pairs therefore produce 120 generative judgments, but still only ten pair-level results. Average within each original pair, then estimate standard error across pair means. Standard error describes uncertainty in that average under independent-pair assumptions; related scenarios need grouped analysis.
 
-`diagnostics.controls` deliberately compares clear/missing-reference/truncated cases with and without the vent's own rubric copy. Identical fresh repeats test serving variation, so cache refresh is explicit. These few cases cannot establish detection rates; literal word echo competes with real understanding.
+More draws can reduce sampling noise, not a shared misreading. Jev already returns probability vectors and reuses cached answers for a presentation. Fresh repeated Jev calls are useful when testing serving variation; replaying a cached answer is not fresh evidence. Recovery calls and order variants never increase the number of original items.
 
-`diagnostics.interview` supplies actual returned answers to experimental talk-to-Jev composition. Grouped vocabulary shortlists and separate Noul continuation/finish/undo decisions compose three candidates, then self-grade distinct texts. It can miss explicit defects; the self-grader is not independent verification, and composed text is not recovered internal reasoning. Expected budget exhaustion retains partial work without invalidating otherwise valid scores. Unexpected invalid measurements still fail, including a served-model change during optional feedback; optional does not mean invalid metadata is silently accepted.
+Background: [Miller, *Adding Error Bars to Evals*](https://www.anthropic.com/research/statistical-approach-to-model-evals).
 
-Sources: [Jev API](https://docs.typesafe.ai/api), [primitives](https://docs.typesafe.ai/primitives), [Jev 1.13 limits](https://docs.typesafe.ai/model-jaggedness/jev-1.13), [Miller, Adding Error Bars to Evals](https://www.anthropic.com/research/statistical-approach-to-model-evals), [Wang et al., order calibration](https://arxiv.org/abs/2305.17926), [Inspect](https://inspect.aisi.org.uk/), [jev-talks algorithm](https://github.com/zie1ony/jev-talks/tree/50bc6df463202f0b7f329077ea688ef97b9a473d).
+### Read the score on its own scale
+
+All pair differences refer to **original B minus original A**. Positive favors B:
+
+- `B_minus_A_preference`: −1 to 1. For Jev, P(B)−P(A); for the generative judge, the mean of A=−1, tie=0, B=1.
+- Jev `B_minus_A_change`: −2 to 2, the expected comparison-level index centered on zero.
+- Generative `B_minus_A_quality`: −3 to 3, the difference between the two 0–3 ratings.
+
+These scales are not interchangeable and none is P(correct). Expected indices use the numerical spacing assigned by the implementation. Separate refusal, incoherence, repetition and off-topic checks help explain a change that one broad score would hide. Disobedience *inside a story* is not refusal of the user's task.
+
+Implementation in [judge.py](../src/llm_judge/judge.py): `measurement_scores`, `summarize` and `FAILURES`.
+
+## Read one complete pair before the aggregate
+
+Start with `run.md`: it includes the full first pair/state, prompts, schemas, exposed provider reasoning, raw replies, errors and order variants. Check that the judge saw the intended material and applied the intended criterion.
+
+The other files serve specific purposes:
+
+- `events.jsonl`: incremental requests, replies, errors and cache events, with run IDs.
+- `samples.jsonl`: complete Inspect samples from paired comparisons, with run IDs.
+- `logs/*.eval`: Inspect's viewer format. Run `uv run inspect view --log-dir outputs/judge/logs`.
+- `results.jsonl`: per-pair summaries after every intended judgment succeeds.
+- `status.json`: whether the current operation is running, successful or failed.
+- `decisions_cache.jsonl`: validated Jev responses and their exact requests.
+- `served_models.json` and `endpoint.json`: persisted served identities and the selected generative endpoint.
+- `results.<run_id>.previous.jsonl`: an archived aggregate from before the current comparison attempt.
+
+`label` uses the same trace transport without running an Inspect evaluation; its full result is saved in `events.jsonl`. Requests are saved before transport, and raw responses before validation. Writes are flushed to disk; a torn final JSONL fragment is preserved separately when resuming.
+
+Outputs may contain private inputs. Keep them local. Implementation: [Trace and durable transport](../src/llm_judge/judge.py), [paired Inspect integration](../src/llm_judge/judge.py), [Inspect log documentation](https://inspect.aisi.org.uk/).
+
+## Reuse work without counting it as new evidence
+
+Rerun the same output directory to reuse validated caches. Decisions are keyed by the exact request, including model, schema, rubric and option order. Generative cache entries also distinguish source configuration and sampling epoch. Changing the criterion requires new judgments.
+
+Concurrent duplicate decisions share one in-flight request. Cache hits and duplicate waiters incur zero new charges; raw saved responses retain their original usage. Failed requests leave the in-flight table so a later explicit retry can try again. Served-model identity is checked across cached/live replies and persisted between runs.
+
+The paired runner archives a previous aggregate at startup. A failed run cannot leave that old result looking like a current success. Unresolved judging failures invalidate the aggregate instead of silently dropping difficult rows. Concurrency defaults to four. Generative sampling uses temperature .7 to permit repeated draws; this is an example setting, not a task-independent optimum. Inspect gets up to six retries, a 180-second attempt timeout and a 600-second total timeout. Jev transport makes at most six HTTP attempts, each with a 180-second timeout. These are bounded operational defaults; record failures rather than treating timeout rows as valid scores.
+
+Implementation: [cache and charge accounting](../src/llm_judge/judge.py), [run lifecycle](../src/llm_judge/judge.py).
+
+### Recover explicitly; preserve the failed attempt
+
+Transient HTTP/network failures get bounded retries with backoff. Permanent errors retain their raw response and fail.
+
+The initial output allowance defaults to 64,000 tokens, with no forced reasoning effort or `min_p` setting. This is a configurable starting allowance, not a minimum the model must consume. For models that count reasoning against output, a typical 30k-token thought can require substantial extra allowance for longer cases and the final answer. Raise `--max-tokens` for the task; inspect reported usage and truncations rather than assuming one budget suits every model.
+
+If a generative model reaches that limit, save its exposed reasoning and partial answer, then ask once for the structured final answer. For a model documented to support disabling reasoning, the default follow-up requests reasoning off with a 2,048-token final-answer allowance. This cannot finish missing reasoning. An unfinished final answer still fails.
+
+Some models cannot disable reasoning or do not accept a requested effort level. Set `--followup-reasoning` for those models: the follow-up keeps the supported settings and the full initial output allowance rather than sending an unsupported disable switch. An endpoint advertising no reasoning parameter gets this no-switch behavior automatically. Only set `--reasoning-effort` to a value documented for the selected model. The normal finalization phase deliberately replaces the initial effort request with reasoning off; `--followup-reasoning` preserves it instead. There is no automatic retry that drops a rejected control or switches models, but a successful API response cannot prove the provider honored a control. Record every phase and its usage; a mandatory-reasoning follow-up still costs reasoning tokens.
+
+TODO: verify opaque reasoning replay for OpenAI encrypted reasoning and Anthropic signed/redacted thinking through the pinned SDK and adapter. Preserve the complete provider-issued blocks, opaque payloads, signatures and required order unchanged; do not reconstruct them from visible text. Current offline tests establish text-reasoning preservation only, not native-format compatibility. Do not assume follow-up works for those formats until that path is checked. -- PI/OpenAI, from wassname
+
+A malformed JSON reply, invalid field or false quotation gets one validation-error retry. Save the invalid reply; never invent a score, patch it with a regex or turn an unresolved judgment into a clean outcome.
+
+Jev's displayed vectors can have rounding error. Validation allows total mass within .02 of one and checks the Score against its vector with a rounding allowance. It does not silently normalize probabilities.
+
+Implementation in [judge.py](../src/llm_judge/judge.py): `Decisions._fetch`, `generate_judgment` and `validate`.
+
+## Choose credentials and a model explicitly
+
+Paid calls use the selected environment's `OPENROUTER_API_KEY`; custom transports may pass an explicit key to `Decisions`. The paired runner blocks Inspect's automatic `.env` search because it can load another project's parent-directory configuration. Select the intended file yourself with `uv run --env-file /path/to/your-project/.env ...`.
+
+The defaults pin Jev to `typesafe/jev-1.13` and the generative judge to `deepseek/deepseek-v4.1-flash`. Prefer the model creator's endpoint when it supports the required features. Choose for task accuracy and parameter support, not latency alone. A creator-operated endpoint is acceptable even when its quantization is reported as `unknown`. This includes the native endpoints for OpenAI, Anthropic, DeepSeek, Moonshot/Kimi, TypeSafe/Jev, Perplexity and Z.AI. For a third-party host, prefer DeepInfra, Fireworks or Groq, but require documented floating-point precision of at least eight bits: FP8/MXFP8, BF16, FP16 or FP32. Reject unknown precision and lower-bit/integer formats on third-party hosts. A trusted company hosting someone else's model is still a third-party host.
+
+OpenRouter has one flat quantization filter, which cannot express “unknown is acceptable only on a creator endpoint.” Our `select_endpoint` and `provider_options` functions enforce that distinction first. They select a compatible creator endpoint when available, otherwise prefer the named hosts among qualifying endpoints. Required parameters and any advertised output cap must also fit. An unspecified cap is not proof that the full allowance is supported; the API may still reject the request. `--creator` must name the actual model creator as shown in the catalog, not merely a provider you trust.
+
+On the first generative run, the code reads the [model's endpoint catalog](https://openrouter.ai/api/v1/models/deepseek/deepseek-v4.1-flash/endpoints), logs the response and pins a selected endpoint in `endpoint.json`. The public catalog check found DeepInfra FP8 with strict structured outputs and a 131,072-token output allowance; Fireworks listed unknown precision and therefore did not meet the third-party rule. This is advertised capability evidence, not an accuracy comparison. Reruns reuse the saved selection so cache replay requires no new catalog call; use a new output directory to deliberately reselect.
+
+In the request, `only` pins the selected endpoint; `allow_fallbacks=False` prevents another provider silently taking over; and `require_parameters=True` excludes endpoints that cannot honor the requested parameters. Third-party requests also include their verified quantization filter. Creator requests omit that filter so `unknown` is not accidentally excluded. The code checks the returned provider name and records the served identity. These restrictions keep the measuring procedure stable; they do not establish calibration on your task. See [OpenRouter's routing fields](https://openrouter.ai/docs/features/provider-routing#quantization).
+
+Offline commands use fixture credentials/transports and preserve the caller's environment. Inspect's evaluation state and the scoped dotenv guard are process-global, so run concurrent independent evaluations in separate processes. Keep the eight-day dependency-age hold when installing or updating; dependency uv settings do not propagate to consuming projects.
+
+Implementation in [judge.py](../src/llm_judge/judge.py): `select_endpoint`, `provider_options`, `Decisions._fetch` and `run`.
+
+## Additional diagnostics are leads, not scores
+
+The normal vent flags possible issues with the supplied setup. Optional controls test specific defects; experimental interviews also see returned answers. None of these outputs is added to the scores or treated as proof that a judgment is correct.
+
+See [Jev visibility and diagnostic commands](jev.md#what-the-vent-can-see) for examples, explicit spending limits and the interview's known failure modes.
+
+<!-- PI/OpenAI, prepared for wassname. -->

@@ -12,10 +12,10 @@ from unittest.mock import patch
 import httpx
 from inspect_ai.model import ChatCompletionChoice, ChatMessageAssistant, ContentReasoning, ModelOutput, get_model
 
-from llm_judge import trace as runtime
-from llm_judge import pairs as evaluation
+from llm_judge import judge as runtime
+from llm_judge import judge as evaluation
 from importlib.resources import files
-VOCAB = json.loads(files('llm_judge').joinpath('vocabulary.json').read_text())
+VOCAB = json.loads(files('llm_judge').joinpath('jev-vocab.json').read_text())
 PAIR = {'id': 'capital', 'context': 'Name the capital of France.', 'response_a': 'Paris.', 'response_b': 'Lyon.'}
 
 
@@ -159,7 +159,8 @@ class InspectPipeline(unittest.TestCase):
         path = Path(tmp)/'pairs.jsonl'
         path.write_text(json.dumps(PAIR)+'\n')
         return argparse.Namespace(pairs=path, mode='both', passes=2, parallel=2, output=Path(tmp)/'run',
-                                  criterion=evaluation.gen.CRITERION, dev=False, dev_budget=.05, **changes)
+                                  criterion=evaluation.CRITERION, dev=False, dev_budget=.05, gen_model=evaluation.MODEL_ID, creator="DeepSeek",
+                                  max_tokens=evaluation.MAX_TOKENS, reasoning_effort=None, followup_reasoning=False, **changes)
 
     def test_full_pipeline_epochs_cache_replay_and_trace(self):
         with tempfile.TemporaryDirectory() as tmp, patch.dict(os.environ, {'OPENROUTER_API_KEY':'offline', 'INSPECT_CACHE_DIR':tmp+'/cache'}):
@@ -292,7 +293,7 @@ class InspectPipeline(unittest.TestCase):
         from openai import BadRequestError
         from openai.types.chat import ChatCompletion
         with tempfile.TemporaryDirectory() as tmp, patch.dict(os.environ, {'OPENROUTER_API_KEY':'offline'}):
-            api = get_model(evaluation.gen.MODEL).api
+            api = get_model(evaluation.MODEL).api
             request = httpx.Request('POST', 'https://openrouter.ai/api/v1/chat/completions')
             def bad(code):
                 body = {'error':{'code':code, 'message':'fixture'}}
@@ -304,21 +305,22 @@ class InspectPipeline(unittest.TestCase):
             async def stub(request, config):
                 sent.append(request)
                 return ChatCompletion.model_validate({'id':'fixture', 'created':0, 'object':'chat.completion',
-                    'model':evaluation.gen.MODEL_ID, 'provider':'DeepInfra',
+                    'model':evaluation.MODEL_ID, 'provider':'DeepInfra',
                     'choices':[{'index':0,'finish_reason':'stop','message':{'role':'assistant','content':'{}'}}]})
             api._generate_completion = stub
             details = [{'type':'reasoning.text','text':'Preserve this reasoning.','format':'unknown','index':0}]
             trace = runtime.Trace(Path(tmp))
-            evaluation.gen.TRACE = trace
+            trace.model('gen_provider', 'DeepInfra')
+            evaluation.TRACE = trace
             try:
                 output, raw = asyncio.run(api.generate(input=[ChatMessageUser(content='Compare.'),
                     ChatMessageAssistant(content=[openrouter_reasoning_details_to_reasoning(details)]),
                     ChatMessageUser(content='Return final JSON.')], tools=[], tool_choice=None,
-                    config=GenerateConfig(extra_body=evaluation.gen.OPTIONS, response_schema=evaluation.gen.schema(False))))
+                    config=GenerateConfig(extra_body=evaluation.OPTIONS, response_schema=evaluation.schema(False))))
             finally:
-                evaluation.gen.TRACE = None
+                evaluation.TRACE = None
             self.assertEqual(sent[0]['messages'][1]['reasoning_details'], details)
-            self.assertEqual(sent[0]['extra_body']['provider'], evaluation.gen.PROVIDER)
+            self.assertEqual(sent[0]['extra_body']['provider'], evaluation.PROVIDER)
             self.assertTrue(sent[0]['response_format']['json_schema']['strict'])
             self.assertEqual(output.metadata['provider'], 'DeepInfra')
             events = runtime.records(Path(tmp)/'events.jsonl')

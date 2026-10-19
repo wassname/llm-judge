@@ -1,21 +1,45 @@
 # LLM-as-judge: wassname's defaults
 
-Practical defaults and guidance for research agents: compare model outputs, label data against multiple rubrics, and debug the measurement itself. Small Python functions with readable implementations, rather than a configurable evaluation framework. The defaults are starting points, not universal accuracy claims.
+Compare model answers, label data against several rubrics, and inspect why a judge gave a score. These are small research tools with logging and recovery built in, rather than an evaluation framework to configure.
 
-## Install and try
+## Install and try without a key
+
+In a Python 3.12+ project:
 
 ```sh
-uv add --exclude-newer "8 days" git+https://github.com/wassname/llm-judge@v0.1.1
-# Or clone, then: uv sync --locked
-uv run llm-judge smoke                         # offline execution check, not an accuracy test
-uv run llm-judge diagnose controls --offline --budget .01
+uv add --exclude-newer "8 days" git+https://github.com/wassname/llm-judge@v0.2.0
+uv run llm-judge smoke
 ```
 
-To work from a clone, run `git clone https://github.com/wassname/llm-judge`, `cd llm-judge`, then `uv sync --locked`. Keep a release-age policy in the consuming project too: a dependency's `[tool.uv]` settings do not carry over. The install command applies the eight-day hold to that resolution; keep any stricter existing policy.
+The smoke test runs the pipeline with simulated replies and prints the path to `run.md`. Open it to see the inputs, judgments and saved evidence. This checks execution, not a real judge's accuracy.
 
-Paid calls use `OPENROUTER_API_KEY` from your explicitly selected environment. The paired runner blocks Inspect's automatic parent-directory `.env` search; load an intended project key yourself, for example with `uv run --env-file /path/to/your-project/.env llm-judge compare ...`. Offline commands use fixture credentials and transports. Run logs and caches stay local.
+## Compare your answers
 
-## Compare outputs
+Save one pair per line in `answers.jsonl`:
+
+```json
+{"id":"capital","context":"Name the capital of France.","response_a":"Paris.","response_b":"Lyon."}
+```
+
+Select your project's `OPENROUTER_API_KEY` explicitly. For example, if it is in that project's `.env` file:
+
+```sh
+uv run --env-file /path/to/your-project/.env llm-judge compare --pairs answers.jsonl
+```
+
+This makes paid calls to **Jev**, TypeSafe's model for probabilities over supplied choices and rating levels. Each pair is shown as A/B and B/A; the unordered answer options are also reversed to check whether their position changes the verdict. Results are mapped back to the original A/B identities; positive differences favor B. [Why these controls matter](docs/defaults.md#check-whether-position-changes-the-verdict).
+
+Read `outputs/judge/run.md` before using the aggregate scores. It contains the complete first pair, not just a winning label. To browse the Inspect logs:
+
+```sh
+uv run inspect view --log-dir outputs/judge/logs
+```
+
+To add a generative judge that explains the evidence before giving numerical ratings, append `--mode both`. Its ratings stay separate from Jev's; `--mode gen` runs it alone. By default, `both` adds twelve generative judgments per pair: four presentations × three draws. The initial output allowance is 64k tokens, with no forced low reasoning effort; use `--max-tokens` to change it. For models that cannot disable reasoning, use `--followup-reasoning`. Opaque/signed reasoning replay is still [unverified](docs/defaults.md#recover-explicitly-preserve-the-failed-attempt). [Model controls, scales and repeated judgments](docs/defaults.md).
+
+## Use the Python functions
+
+`compare(pairs, ...)` runs the same paired evaluation synchronously and owns its output directory. For example:
 
 ```python
 from llm_judge import compare
@@ -23,66 +47,33 @@ from llm_judge import compare
 results = compare([
     {"id": "capital", "context": "Name the capital of France.",
      "response_a": "Paris.", "response_b": "Lyon."},
-], mode="both", output="outputs/capital")
+], criterion="Which answer correctly names France's capital?", output="outputs/capital")
 ```
 
-`compare` is synchronous, owns its output directory/caches, and defaults to **Jev only**. Explanations and quoted numerical judgments require `mode="gen"` or `mode="both"`; they cost additional model calls. Jev supplies narrow metrics and probabilities. The generative judge explains evidence **before** numerical ratings and quotes each answer: an attention procedure as well as an audit trail. They see the original inputs, blind to each other's labels; their scores stay separate.
+For several questions about one shared input, use asynchronous `label(state, questions, trace=trace)`. Questions can apply simultaneously; no single winning category is required. [A complete example and Jev's visibility rules](docs/jev.md#label-one-input-against-several-rubrics).
 
-The default criterion is answer correctness/quality. Set `criterion=` for your research question; good-looking scores on the wrong criterion are not useful. [Defaults and their reasons](docs/defaults.md) explain scales, provider restrictions, order controls and uncertainty.
+## Check the measurement
 
-For a dataset, put one pair per JSONL line:
+Scores can move because behavior changed, because the judge preferred the presentation, or because the input was lost or truncated. [Choose controls that distinguish these explanations](docs/defaults.md#start-with-a-difference-you-can-check).
 
-```sh
-uv run llm-judge compare --pairs examples/pairs.jsonl --mode both --passes 3
-uv run inspect view --log-dir outputs/judge/logs
-```
+Jev labeling and comparison calls include an unscored **vent**: an extra question that can flag an issue with the supplied data or rubric. It receives its own exact rubric copy because Jev questions cannot read each other. Keep the full diagnostic probabilities; `none` is not clearance. [What the vent can see](docs/jev.md#what-the-vent-can-see).
 
-Each original pair has four presentations: two response orders × two unordered-option orders, mapped back before averaging. Ordered Score levels stay ordered. Generative draws average within the original pair; uncertainty is across pairs, not presentations. Repeating cached Jev results adds no independent evidence.
+Additional controls and experimental post-label interviews are optional, separate work. [Commands, costs and limitations](docs/jev.md#additional-diagnostics). In particular, the interview is not yet a reliable critic.
 
-## Label one state against many rubrics
+## Updating from v0.1.1
 
-```python
-import asyncio
-from llm_judge import Trace, label
+The root imports `Trace`, `compare` and `label` remain. Internal submodule imports now come from `llm_judge.judge`; optional diagnostics come from `llm_judge.talk_to_jev`. The vocabulary resource is `jev-vocab.json`.
 
-async def main():
-    questions = {
-        "correct": {"type": "noul", "instructions": "Does the supplied answer correctly name France's capital?"},
-        "quality": {"type": "score", "instructions": "How well does the answer satisfy the request?",
-                    "criteria": ["Wrong or no answer.", "Partly answers.", "Correct and direct."]},
-    }
-    with Trace("outputs/labels") as trace:
-        result = await label({"request": "Name the capital of France.", "answer": "Paris."}, questions, trace=trace)
-    print(result["means"])
+The initial output allowance changes from 32k to 64k, with no forced low reasoning effort or `min_p`. Provider selection now applies the creator/third-party precision rule. CLI comparisons require `--pairs`; non-1 `--passes` is rejected in Jev-only mode. These are deliberate behavior changes, not just file moves. Do not pool old and new generative scores as if they used the same measurement procedure; the source-keyed generative cache invalidates old entries.
 
-asyncio.run(main())
-```
+## Reference and development
 
-`label` is asynchronous and Jev-specific; the caller owns the `Trace`. All questions share one state per call. It returns two option-order views, their mean vectors/scores and the unscored vent. Retain `result["views"]` and `result["unscored_vent"]`, not only the printed means. Several rubrics can apply simultaneously: do not force one winning tradition or virtue. Question IDs are lookup keys, not instructions; put the criterion in `instructions`.
+- [Defaults and their reasons](docs/defaults.md): score meanings, uncertainty, caching, recovery, credentials and provider restrictions.
+- [Jev questions and diagnostics](docs/jev.md): runnable labeling example, typed answers, visibility and hierarchical decisions.
+- [Read the implementation](src/llm_judge/judge.py): the complete normal procedure is in one file, including questions, judging, order controls, recovery, caching and traces. [talk_to_jev.py](src/llm_judge/talk_to_jev.py) contains the optional controls and experimental interview.
 
-## Debug the judge
+To work from source, clone this repository, run `uv sync --locked`, then `uv run python -m unittest discover -s tests/regression -v`. Keep the dependency-age hold in the consuming project too; a dependency's uv settings do not carry over. The install command above applies an eight-day hold to that resolution.
 
-An unscored broad vent is included by default. Jev isolates questions, so its vent gets an exact copy of the scoring questions inside **its own instructions**. It sees supplied setup, not returned sibling answers. Keep all 216 diagnostic words/emojis and the full vector: `none` is not clearance, and `consent` can describe valid content rather than defective data.
+Logs and caches stay local. The paired runner blocks Inspect's automatic search for parent `.env` files, so credentials must be selected explicitly. [Execution and privacy details](docs/defaults.md#choose-credentials-and-a-model-explicitly).
 
-Read the complete first pair/state in `run.md`, including prompts, schemas, exposed reasoning, raw replies, failures and order variants. `events.jsonl` and `samples.jsonl` are incremental; Inspect `.eval` gives the viewer; `status.json` distinguishes complete runs from interrupted ones. Rerunning the same output directory reuses validated caches.
-
-Additional diagnostics are separate, explicitly unscored:
-
-```sh
-# Live clear/missing-reference/truncated controls, 12 fresh calls by default:
-uv run llm-judge diagnose controls --budget .01 --output outputs/controls
-# Experimental post-label talk-to-Jev interview from saved results:
-uv run llm-judge diagnose feedback --input outputs/judge/results.jsonl --budget .05
-```
-
-The optional `compare --dev` shortcut does paid post-label feedback for **only the first pair, first presentation**; it is not a dataset-wide audit. The separate saved-result command above makes this extra work explicit. Only controls/smoke have an offline CLI mode; feedback is tested with fixture transports through the Python API.
-
-A budget is an observed-cost stop, not a provider billing cap. Controls are constructed examples, not a validated detector. Interviews can falsely say no issue; every attempt remains visible. A code reviewer or oracle can instead read the same full trace and original rubric. For an independent opinion, withhold prior labels; for post-label critique, explicitly include them. Give a reasoning/chat reviewer the saved state and rubric as data in its prompt—not an unchanged Jev decisions-API request.
-
-[Hierarchy and Jev visibility](docs/jev.md) distinguish nested data, parallel questions and adaptive routing. [Source](src/llm_judge) is organized into the small API (`compare`, `label`, `Trace`), backends, and optional `diagnostics`/`feedback` modules. No plugin registry or automatic rubric selection.
-
-For custom offline transports, construct `Decisions(trace, validate, transport=..., api_key="offline")`; Noul questions may omit `criteria`. Production defaults require `OPENROUTER_API_KEY` rather than inventing a fallback credential.
-
-Development: `uv run python -m unittest discover -s tests/regression -v`. Package resolution keeps an eight-day release-age hold; use the committed lockfile. Dependency updates are deliberate, not a reason to disable that hold.
-
-<!-- Guidance/code prepared by PI/OpenAI for wassname; adapted from the earlier judge gist. -->
+<!-- PI/OpenAI, prepared for wassname. -->

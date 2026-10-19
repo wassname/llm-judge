@@ -9,8 +9,8 @@ from pathlib import Path
 
 import httpx
 
-from llm_judge import jev as judge_jev
-from llm_judge.feedback import compose_feedback
+from llm_judge import judge as judge_jev
+from llm_judge.talk_to_jev import compose_feedback
 
 
 SENTENCE = 'the reference is missing'

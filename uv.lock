@@ -3,7 +3,7 @@ revision = 3
 requires-python = ">=3.12"
 
 [options]
-exclude-newer = "2026-10-11T05:17:50.680618869Z"
+exclude-newer = "2026-10-11T12:27:47.864884936Z"
 exclude-newer-span = "P8D"
 
 [[package]]
@@ -2241,7 +2241,7 @@ wheels = [
 
 [[package]]
 name = "wassname-llm-judge"
-version = "0.1.1"
+version = "0.2.0"
 source = { editable = "." }
 dependencies = [
     { name = "httpx" },
