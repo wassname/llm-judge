@@ -1,7 +1,7 @@
 """Read this file for the complete default evaluation, from inputs to saved evidence.
 
 compare() evaluates answer pairs; label() batches rubrics over one input.
-Optional post-label interviews live in talk_to_jev.py. -- PI/OpenAI
+First-sample Jev interviews are on by default; their implementation lives in talk_to_jev.py. -- PI/OpenAI
 """
 from __future__ import annotations
 
@@ -26,8 +26,11 @@ from unittest.mock import patch
 import httpx
 from inspect_ai import Epochs, Task, eval as inspect_eval
 from inspect_ai.dataset import MemoryDataset, Sample
+from inspect_ai.event import ModelEvent
+from inspect_ai.log import transcript
 from inspect_ai.hooks import Hooks, hooks
 from inspect_ai.model import CachePolicy, ChatMessageUser, ContentText, GenerateConfig, ModelAPI, ModelOutput, ResponseSchema, get_model, modelapi
+from inspect_ai.model._cache import CacheEntry, cache_fetch, cache_path
 from inspect_ai.model._openai import OpenAIResponseError
 from inspect_ai.model._providers.openrouter import OpenRouterAPI
 from inspect_ai.scorer import Score, mean, scorer
@@ -41,13 +44,17 @@ from pydantic import BaseModel, ConfigDict, Field
 
 TRACE = None
 
-# PI/OpenAI: Creator-operated endpoints are acceptable even when their quantization is unknown.
+# PI/OpenAI: Model-author endpoints are acceptable even when their quantization is unknown.
 # PI/OpenAI: Otherwise prefer DeepInfra, Fireworks or Groq; require documented floating point >=8 bits, never unknown.
 FLOAT_PRECISIONS = {"fp8", "mxfp8", "fp16", "bf16", "fp32"}
 PREFERRED_HOSTS = ("DeepInfra", "Fireworks", "Groq")
 MODEL_ID = "deepseek/deepseek-v4.1-flash"
 MODEL = f"judge-openrouter/{MODEL_ID}"
 MAX_TOKENS = 64000
+READ_LOG_INSTRUCTION = (
+    "LLM: Read the full log and complete first-sample trace, check behavior against the stated expectations, "
+    "and tell the user what you checked, what passed or failed, and what remains uncertain."
+)
 
 
 def provider_options(endpoint: dict, creator: str) -> dict:
@@ -253,6 +260,7 @@ class Trace:
         except (ValueError, OSError) as error:
             self.status("failed", phase="initializing", error=repr(error))
             self.markdown("Failed trace initialization", {"error": repr(error), "read": "Existing records are preserved for inspection."})
+            self.finish("failed", phase="initializing", error=repr(error))
             raise
 
     def __enter__(self):
@@ -263,7 +271,7 @@ class Trace:
         if error is not None:
             self.event("failed", error=repr(error))
             self.markdown("Failed operation", {"error": repr(error), "read": "events.jsonl"})
-        self.status("failed" if error is not None else "success")
+        self.finish("failed" if error is not None else "success")
         return False
 
     def event(self, kind, **data):
@@ -277,6 +285,13 @@ class Trace:
         pending = self.output / "status.json.tmp"
         pending.write_text(json.dumps(value, ensure_ascii=False))
         pending.replace(self.output / "status.json")
+
+    def finish(self, status, **data):
+        self.status(status, **data)
+        with (self.output / "run.md").open("a") as stream:
+            stream.write("\n" + READ_LOG_INSTRUCTION + "\n")
+            stream.flush()
+            os.fsync(stream.fileno())
 
     def model(self, backend, served):
         if backend in self.served and self.served[backend] != served:
@@ -462,11 +477,30 @@ def dataset(pairs: list[dict], criterion: str, *, mode="gen", vocabulary=None) -
     ])
 
 
+def discard_invalid_generation(state: TaskState, policy: CachePolicy, reason: str) -> None:
+    # PI/OpenAI: Inspect 0.3.247 caches before our range/quote validation; reject only the exact observed bad entry.
+    event = next(e for e in reversed(transcript().events) if isinstance(e, ModelEvent))
+    model = get_model()
+    if str(model) != event.model:
+        raise RuntimeError("Cannot identify rejected generation's cache: active model differs from its event")
+    entry = CacheEntry(base_url=model.api.base_url, config=event.config, input=event.input,
+                       model=event.model, policy=policy, tool_choice=event.tool_choice, tools=event.tools)
+    cached = cache_fetch(entry)
+    removed = cached is not None and cached.completion == state.output.completion and cached.stop_reason == state.output.stop_reason
+    if removed:
+        (cache_path(event.model) / entry.key).unlink(missing_ok=True)
+    rejected = {"model": event.model, "key": entry.key, "removed": removed, "reason": reason}
+    state.metadata["cache_rejections"].append(rejected)
+    if TRACE is not None:
+        TRACE.event("invalid_generation_cache", **rejected)
+
+
 @solver
 def generate_judgment(options=None, *, max_tokens=MAX_TOKENS, followup_reasoning=False):
     if options is None:
         options = OPTIONS
     async def solve(state: TaskState, generate: Generate) -> TaskState:
+        state.metadata["cache_rejections"] = []
         response_schema = schema(state.metadata["reverse_options"])
         # PI/OpenAI: Separate cache entries for sampled repeats; presentations are still one original pair.
         cache = CachePolicy(expiry="365D", scopes={"source": state.metadata["source"], "epoch": str(state.epoch)})
@@ -488,11 +522,13 @@ def generate_judgment(options=None, *, max_tokens=MAX_TOKENS, followup_reasoning
             state = await generate(state, response_schema=response_schema, cache=cache, **follow_options)
         for repair in range(2):
             if state.output.stop_reason != "stop":
+                discard_invalid_generation(state, cache, f"unfinished judgment: {state.output.stop_reason}")
                 raise RuntimeError(f"unfinished judgment: {state.output.stop_reason}")
             try:
                 rating = PairJudgment.model_validate_json(state.output.completion)
                 validate_quotes(rating, state.metadata["pair"], state.metadata["order"])
             except ValueError as error:
+                discard_invalid_generation(state, cache, str(error))
                 if repair:
                     raise
                 # PI/OpenAI: Keep the invalid reply; request one new valid judgment, never patch its scores.
@@ -528,8 +564,8 @@ def reverse_choices(request: dict) -> dict:
     return request
 
 
-async def label(state, questions: dict, *, trace: Trace, model: str = JEV, decide=None) -> dict:
-    """Two option-order views; means are derived summaries, not new independent judgments. -- PI/OpenAI"""
+async def label(state, questions: dict, *, trace: Trace, model: str = JEV, decide=None, feedback=True, feedback_budget=.05) -> dict:
+    """Two order views of one item plus a paid first-state interview; clients need charged() or feedback=False. -- PI/OpenAI"""
     if not (bool(questions)):
         raise ValueError("empty question set")
     if decide is None:
@@ -539,6 +575,10 @@ async def label(state, questions: dict, *, trace: Trace, model: str = JEV, decid
     request = with_vent({"model": model, "state": state, "questions": questions}, vocabulary()["diagnostic"])
     requests = [request, reverse_choices(request)]
     first = trace.label_count == 0
+    if first and feedback and (not math.isfinite(feedback_budget) or feedback_budget <= 0):
+        raise ValueError("feedback_budget must be finite and positive; use feedback=False to skip the interview")
+    if first and feedback and not callable(getattr(decide, "charged", None)):
+        raise TypeError("Default first-state feedback needs a client with charged(); pass feedback=False for a plain callback")
     trace.label_count += 1
     if first:
         trace.first_keys.update(digest(r) for r in requests)
@@ -559,6 +599,9 @@ async def label(state, questions: dict, *, trace: Trace, model: str = JEV, decid
                     means[name]["score"] = sum(a["score"] for a in answers) / 2
         result = {"means": means, "views": [{"request":r, "body":b} for r,b in zip(requests,bodies,strict=True)],
                   "unscored_vent": [b["answers"]["vent"] for b in bodies]}
+        if first and feedback:
+            from .talk_to_jev import interview
+            result["feedback"] = await interview(requests[0], bodies[0], trace=trace, budget=feedback_budget, decide=decide)
         trace.event("label_complete", result=result)
         return result
     finally:
@@ -647,7 +690,7 @@ def measurement_scores(mode):
     return score
 
 
-def task(pairs, mode, passes, parallel, trace, vocabulary, criterion, *, dev=False, dev_budget=.05, transport=None, model=None, options=None, max_tokens=MAX_TOKENS, followup_reasoning=False, model_id=MODEL_ID):
+def task(pairs, mode, passes, parallel, trace, vocabulary, criterion, *, dev=True, dev_budget=.05, transport=None, model=None, options=None, max_tokens=MAX_TOKENS, followup_reasoning=False, model_id=MODEL_ID):
     if not (mode in {"jev", "gen", "both"}):
         raise ValueError("mode must be jev, gen or both")
     if not (passes > 0 and parallel > 0):
@@ -735,10 +778,10 @@ def run(args, *, pairs=None, transport=None, model=None):
             raise ValueError("Pair fields must be strings; IDs must be nonempty")
         if len({p["id"] for p in pairs}) != len(pairs):
             raise ValueError("duplicate pair IDs")
-        if args.dev and args.mode not in {"jev", "both"}:
-            raise ValueError("--dev is Jev's experimental follow-up")
         if args.max_tokens <= 0:
             raise ValueError("max_tokens must be positive")
+        if args.dev and args.mode in {"jev", "both"} and (not math.isfinite(args.dev_budget) or args.dev_budget <= 0):
+            raise ValueError("feedback budget must be finite and positive; use --no-feedback to skip the interview")
         passes = (1 if args.mode == "jev" else 3) if args.passes is None else args.passes
         if args.mode == "jev" and passes != 1:
             raise ValueError("passes is for generative draws only; use diagnostic controls for fresh Jev repeats")
@@ -788,6 +831,8 @@ def run(args, *, pairs=None, transport=None, model=None):
         trace.markdown("Configuration and expected distinctions", {
             "criterion": args.criterion, "mode": args.mode, "parallel": args.parallel, "presentations_per_pair": 4,
             "jev_model": JEV if args.mode in {"jev", "both"} else None,
+            "first_jev_interview": {"enabled": args.dev and args.mode in {"jev", "both"},
+                                    "budget": args.dev_budget if args.dev and args.mode in {"jev", "both"} else None},
             "generative": None if args.mode == "jev" else {
                 "model": args.gen_model if model is None else "injected model/fixture", "passes": passes,
                 "requested_options": options, "max_tokens": args.max_tokens,
@@ -797,12 +842,14 @@ def run(args, *, pairs=None, transport=None, model=None):
         with patch("inspect_ai._eval.context.init_dotenv", new=lambda: None):
             logs = inspect_eval(evaluation, log_dir=str(args.output / "logs"), log_model_api=True, max_samples=args.parallel, display="none")
         results = summarize(logs[0], pairs, args.mode, passes, trace)
-        trace.status("success", results="results.jsonl", eval=logs[0].location)
+        trace.finish("success", results="results.jsonl", eval=logs[0].location)
+        print(READ_LOG_INSTRUCTION)
         return results
     except BaseException as error:
         trace.event("run_failed", error=repr(error))
         trace.status("failed", error=repr(error))
         trace.markdown("Failed run: no valid aggregate", {"error": repr(error), "read": "events.jsonl, samples.jsonl, and the Inspect log"})
+        trace.finish("failed", error=repr(error))
         raise
     finally:
         TRACE = None
@@ -848,9 +895,9 @@ def smoke(args):
 
 
 def compare(pairs: list[dict], *, mode="jev", criterion=CRITERION, passes=None, parallel=4,
-            output="outputs/judge", dev=False, dev_budget=.05, gen_model=MODEL_ID, creator="DeepSeek",
+            output="outputs/judge", dev=True, dev_budget=.05, gen_model=MODEL_ID, creator="DeepSeek",
             max_tokens=MAX_TOKENS, reasoning_effort=None, followup_reasoning=False) -> list[dict]:
-    """Compare supplied pairs; output owns full traces, caches and atomic aggregate status. -- PI/OpenAI"""
+    """Compare pairs with a paid first-Jev-pair interview by default; keep full traces and atomic aggregates. -- PI/OpenAI"""
     args = argparse.Namespace(pairs=None, mode=mode, criterion=criterion, passes=passes, parallel=parallel,
                               output=Path(output), dev=dev, dev_budget=dev_budget, gen_model=gen_model, creator=creator,
                               max_tokens=max_tokens, reasoning_effort=reasoning_effort, followup_reasoning=followup_reasoning)
@@ -913,7 +960,7 @@ def main():
     compare.add_argument("--pairs", type=Path, required=True, help="JSONL id/context/response_a/response_b; paid comparison requires explicit input")
     compare.add_argument("--mode", choices=("jev", "gen", "both"), default="jev")
     compare.add_argument("--gen-model", default=MODEL_ID, help="Versioned generative model ID")
-    compare.add_argument("--creator", default="DeepSeek", help="Actual model creator's provider_name in the endpoint catalog")
+    compare.add_argument("--model-author", "--creator", dest="creator", default="DeepSeek", help="Actual model author's provider_name in the endpoint catalog")
     compare.add_argument("--max-tokens", type=int, default=MAX_TOKENS, help="Initial output allowance, including reasoning where counted by the provider")
     compare.add_argument("--reasoning-effort", help="Only set an effort value documented for this model; omitted by default")
     compare.add_argument("--followup-reasoning", action="store_true", help="For models that cannot disable reasoning: retain supported controls and the full output allowance on follow-up")
@@ -921,8 +968,10 @@ def main():
     compare.add_argument("--passes", type=int, help="Generative draws per view (default 3); Jev-only mode requires 1")
     compare.add_argument("--parallel", type=int, default=4)
     compare.add_argument("--output", type=Path, default=Path("outputs/judge"))
-    compare.add_argument("--dev", action="store_true", help="Paid unscored post-label feedback on the first pair only; not a dataset audit")
-    compare.add_argument("--dev-budget", type=float, default=.05, help="Observed-cost stop, not a provider billing cap")
+    feedback = compare.add_mutually_exclusive_group()
+    feedback.add_argument("--dev", action="store_true", dest="dev", default=True, help="First-pair Jev interview (already enabled by default)")
+    feedback.add_argument("--no-feedback", action="store_false", dest="dev", help="Skip the first-pair Jev interview for an explicit caller budget/fixture")
+    compare.add_argument("--feedback-budget", "--dev-budget", dest="dev_budget", type=float, default=.05, help="First-pair observed-cost stop; default $.05, not a provider billing cap")
     smoke_parser = commands.add_parser("smoke", help="Run the evaluation pipeline with simulated replies; not an accuracy test")
     smoke_parser.add_argument("--output", type=Path, default=Path("outputs/smoke"))
     smoke_parser.set_defaults(pairs=None, criterion=CRITERION, mode="both", passes=1, parallel=1, dev=False, dev_budget=.05, gen_model=MODEL_ID, creator="DeepSeek", max_tokens=MAX_TOKENS, reasoning_effort=None, followup_reasoning=False)

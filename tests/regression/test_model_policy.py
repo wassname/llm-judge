@@ -120,6 +120,35 @@ class ModelExecution(unittest.TestCase):
             self.assertEqual(json.loads((args.output / "endpoint.json").read_text())["endpoint"], chosen)
             self.assertIn('"followup_reasoning": true', (args.output / 'run.md').read_text())
 
+    def test_rejected_quote_cache_is_evicted_through_real_openrouter_adapter(self):
+        with tempfile.TemporaryDirectory() as tmp, patch.dict(os.environ, {"OPENROUTER_API_KEY": "offline", "INSPECT_CACHE_DIR": tmp + "/cache"}):
+            args = fixtures.InspectPipeline().options(tmp)
+            args.mode, args.passes, args.parallel = "gen", 1, 1
+            chosen = endpoint("DeepInfra", "fp8", tag="deepinfra/fp8")
+            catalog = httpx.Response(200, request=httpx.Request("GET", "https://openrouter.ai/catalog"), json={"data": {"endpoints": [chosen]}})
+            invalid, calls = True, []
+            async def completion(api, request, config):
+                calls.append(request)
+                result = fixtures.rating(request['messages'][0]['content'])
+                if invalid:
+                    result['response_A']['quotes'] = ['invented span']
+                return ChatCompletion.model_validate({'id': 'fixture', 'created': 0, 'object': 'chat.completion',
+                    'model': judge.MODEL_ID, 'provider': 'DeepInfra',
+                    'choices': [{'index': 0, 'finish_reason': 'stop', 'message': {'role': 'assistant', 'content': json.dumps(result)}}]})
+            with patch.object(judge.httpx, 'get', return_value=catalog), patch.object(OpenRouterAPI, '_generate_completion', new=completion):
+                with self.assertRaises(ValueError):
+                    judge.run(args)
+                failed_calls = len(calls)
+                invalid = False
+                result = judge.run(args)
+                self.assertEqual(result[0]['gen']['B_minus_A_preference'], -1)
+                self.assertEqual(len(calls) - failed_calls, 4)
+                successful_calls = len(calls)
+                judge.run(args)
+                self.assertEqual(len(calls), successful_calls)
+            rejected = [r for r in judge.records(args.output/'events.jsonl') if r['kind']=='invalid_generation_cache']
+            self.assertEqual(sum(r['removed'] for r in rejected), 2)
+
     def test_always_reasoning_followup_keeps_full_allowance_and_returned_reasoning(self):
         with tempfile.TemporaryDirectory() as tmp, patch.dict(os.environ, {"INSPECT_CACHE_DIR": tmp + "/cache"}):
             args = fixtures.InspectPipeline().options(tmp)

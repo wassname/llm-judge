@@ -37,9 +37,23 @@ The generative judge follows this order:
 
 This is an attention procedure, like a checklist, as well as an audit trail. The code verifies that quotes occur in the answers. That catches invented quotations; it cannot establish that an interpretation is sound.
 
-With `mode="both"`, Jev and the generative judge see the original inputs, not each other's labels. Their scores remain separate. A critic shown Jev's returned labels answers a different, post-label question and may be influenced by them. Prefer a different model family from the model being evaluated, and inspect disagreements.
+With `mode="both"`, Jev and the generative judge see the original inputs, not each other's labels. Their scores remain separate. A critic shown Jev's returned labels answers a different, post-label question and may be influenced by them. Use a judge from a different model family than the student model whose answers it grades. This reduces a known self-preference risk; it does not guarantee independent errors or correctness. See Chen et al., [*Beyond the Surface: Measuring Self-Preference in LLM Judgments*](https://arxiv.org/abs/2506.02592), EMNLP 2025. Inspect disagreements rather than treating a second judge as ground truth.
 
 Implementation: [generative schema, quote checks and recovery](../src/llm_judge/judge.py). For known judge biases and source evidence: [ML-debug judge guide](https://github.com/wassname/ml-debug/blob/main/references/llm_judges.md).
+
+### Debug with an open reasoning judge
+
+When Jev's probability looks wrong, use the generative judge to make the comparison easier to inspect. The default generative model is open-weight DeepSeek. For example, after selecting your project's key:
+
+```sh
+uv run llm-judge compare --pairs answers.jsonl --mode gen --passes 1 --output outputs/debug-judge
+```
+
+Read the complete first pair in `run.md`: original input, rubric, reasoning returned by the provider, quoted evidence, ratings and final `judge_note`. That last, unscored setup note serves as a short exit interview. Look for a misread action, missing context or an unclear criterion before accepting the score.
+
+To investigate a harness or rendering problem, supply the relevant code/configuration as part of the judged context; the judge cannot inspect files or settings it was never given. For a more focused follow-up, give a reviewer the saved trace and explicitly ask what in the framing, setup or supplied harness prevented a reliable judgment. Keep that feedback separate from the numerical scores. A blind second judgment gets the original inputs without prior labels; a post-label interview gets the actual labels explicitly.
+
+Provider-returned reasoning can help locate a misunderstanding, but it is not an independent correctness check. Some APIs expose no readable reasoning, and opaque/signed replay remains [unverified](#recover-explicitly-preserve-the-failed-attempt). The optional [talk-to-Jev interview](jev.md#experimental-post-label-interview) composes feedback through decisions; it is a different, experimental procedure, not Jev's hidden reasoning.
 
 ## Check whether position changes the verdict
 
@@ -49,7 +63,7 @@ Map the verdicts back to the original answer identities **before averaging**. If
 
 Reverse unordered Choice options, not ordered Score levels. Reversing “much worse … much better” would change the meaning of the scale rather than just its presentation.
 
-Implementation in [judge.py](../src/llm_judge/judge.py): `make_request`, `schema`, `measurement_scores` and `discrepancy`. Background: [Wang et al., *Large Language Models are not Fair Evaluators*](https://arxiv.org/abs/2305.17926) and [Jev 1.13 limitations](https://docs.typesafe.ai/model-jaggedness/jev-1.13).
+Implementation in [judge.py](../src/llm_judge/judge.py): `make_request`, `schema`, `measurement_scores` and `discrepancy`. Background: Shi et al., [*Judging the Judges: A Systematic Study of Position Bias in LLM-as-a-Judge*](https://arxiv.org/abs/2406.07791), IJCNLP-AACL 2025; [Wang et al., *Large Language Models are not Fair Evaluators*](https://arxiv.org/abs/2305.17926); and [Jev 1.13 limitations](https://docs.typesafe.ai/model-jaggedness/jev-1.13).
 
 ### Repeat judgments, not the item count
 
@@ -73,7 +87,7 @@ Implementation in [judge.py](../src/llm_judge/judge.py): `measurement_scores`, `
 
 ## Read one complete pair before the aggregate
 
-Start with `run.md`: it includes the full first pair/state, prompts, schemas, exposed provider reasoning, raw replies, errors and order variants. Check that the judge saw the intended material and applied the intended criterion.
+Start with `run.md`: it includes the full first pair/state, prompts, schemas, exposed provider reasoning, raw replies, errors and order variants, without clipping the sample. Check that the judge saw the intended material and applied the intended criterion. On normal completion or handled failure, the last line instructs the reading LLM to read the entire log, check the full first-sample trace against the stated expectations, and tell the user what it checked and what failed or remains uncertain. A hard process kill can interrupt that final write; a `running` status is not completion.
 
 The other files serve specific purposes:
 
@@ -93,6 +107,8 @@ Outputs may contain private inputs. Keep them local. Implementation: [Trace and 
 ## Reuse work without counting it as new evidence
 
 Rerun the same output directory to reuse validated caches. Decisions are keyed by the exact request, including model, schema, rubric and option order. Generative cache entries also distinguish source configuration and sampling epoch. Changing the criterion requires new judgments.
+
+Inspect caches model replies before our JSON, range and quote checks. When a reply fails those checks, the runner removes only its matching cache entry and records the key and reason. The raw reply stays in the trace. A later rerun can request a fresh judgment while valid cached judgments remain reusable. This uses the pinned Inspect cache/event API.
 
 Concurrent duplicate decisions share one in-flight request. Cache hits and duplicate waiters incur zero new charges; raw saved responses retain their original usage. Failed requests leave the in-flight table so a later explicit retry can try again. Served-model identity is checked across cached/live replies and persisted between runs.
 
@@ -124,6 +140,10 @@ Paid calls use the selected environment's `OPENROUTER_API_KEY`; custom transport
 
 The defaults pin Jev to `typesafe/jev-1.13` and the generative judge to `deepseek/deepseek-v4.1-flash`. Prefer the model creator's endpoint when it supports the required features. Choose for task accuracy and parameter support, not latency alone. A creator-operated endpoint is acceptable even when its quantization is reported as `unknown`. This includes the native endpoints for OpenAI, Anthropic, DeepSeek, Moonshot/Kimi, TypeSafe/Jev, Perplexity and Z.AI. For a third-party host, prefer DeepInfra, Fireworks or Groq, but require documented floating-point precision of at least eight bits: FP8/MXFP8, BF16, FP16 or FP32. Reject unknown precision and lower-bit/integer formats on third-party hosts. A trusted company hosting someone else's model is still a third-party host.
 
+Why care about the endpoint? [Artificial Analysis's endpoint-accuracy methodology](https://artificialanalysis.ai/methodology/endpoint-accuracy-index) describes differences due to quantization, sampling, context handling, token limits and prompt parsers—not precision alone. Its [gpt-oss-120b provider results](https://artificialanalysis.ai/models/gpt-oss-120b/providers?endpoint-accuracy=by-eval#endpoint-accuracy) and [Kimi K3 results](https://artificialanalysis.ai/models/kimi-k3/providers?endpoint-accuracy=by-eval#endpoint-accuracy) illustrate why one provider ranking need not transfer between models.
+
+For precision evidence, [*Give Me BF16 or Give Me Death?*](https://arxiv.org/abs/2411.02355v4), ACL 2025, reports effectively lossless FP8 in its Llama-3.1 experiments. That is evidence for a practical prior, not proof that every FP8 endpoint is accurate or every lower-bit format is bad. The creator/host rule above is wassname's chosen default; native formats and endpoint behavior still need to be understood.
+
 OpenRouter has one flat quantization filter, which cannot express “unknown is acceptable only on a creator endpoint.” Our `select_endpoint` and `provider_options` functions enforce that distinction first. They select a compatible creator endpoint when available, otherwise prefer the named hosts among qualifying endpoints. Required parameters and any advertised output cap must also fit. An unspecified cap is not proof that the full allowance is supported; the API may still reject the request. `--creator` must name the actual model creator as shown in the catalog, not merely a provider you trust.
 
 On the first generative run, the code reads the [model's endpoint catalog](https://openrouter.ai/api/v1/models/deepseek/deepseek-v4.1-flash/endpoints), logs the response and pins a selected endpoint in `endpoint.json`. The public catalog check found DeepInfra FP8 with strict structured outputs and a 131,072-token output allowance; Fireworks listed unknown precision and therefore did not meet the third-party rule. This is advertised capability evidence, not an accuracy comparison. Reruns reuse the saved selection so cache replay requires no new catalog call; use a new output directory to deliberately reselect.
@@ -136,7 +156,7 @@ Implementation in [judge.py](../src/llm_judge/judge.py): `select_endpoint`, `pro
 
 ## Additional diagnostics are leads, not scores
 
-The normal vent flags possible issues with the supplied setup. Optional controls test specific defects; experimental interviews also see returned answers. None of these outputs is added to the scores or treated as proof that a judgment is correct.
+The normal vent flags possible issues with the supplied setup. The first Jev comparison/labeling sample also gets a bounded experimental interview by default, with the actual returned answers supplied explicitly; it is separate from the scored questions and their means. The allowance defaults to $.05 observed cost and 75 calls, not a hard billing cap. An expected budget stop retains partial work and valid scores. Callers can explicitly opt out (`--no-feedback`, `compare(dev=False)`, or `label(feedback=False)`); offline smokes do not call live interviews. Generative-only judgments already include their own unscored exit note and do not silently invoke another backend. Additional controls test specific defects. None of these feedback outputs is added to the scores or treated as proof that a judgment is correct.
 
 See [Jev visibility and diagnostic commands](jev.md#what-the-vent-can-see) for examples, explicit spending limits and the interview's known failure modes.
 

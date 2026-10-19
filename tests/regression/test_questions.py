@@ -44,8 +44,8 @@ class Questions(unittest.IsolatedAsyncioTestCase):
             untouched = json.loads(json.dumps(questions))
             with Trace(tmp) as trace:
                 decide = Decisions(trace, validate, transport=httpx.MockTransport(reply))
-                result = await label(state, questions, trace=trace, decide=decide)
-                replay = await label(state, questions, trace=trace, decide=decide)
+                result = await label(state, questions, trace=trace, decide=decide, feedback=False)
+                replay = await label(state, questions, trace=trace, decide=decide, feedback=False)
             self.assertEqual(len(sent),2)
             self.assertEqual(questions, untouched)
             self.assertEqual(sent[0]['state'], state)
@@ -111,7 +111,7 @@ class Questions(unittest.IsolatedAsyncioTestCase):
                 return httpx.Response(200,json=reply_body(json.loads(request.content)))
             with Trace(tmp) as trace:
                 decide = Decisions(trace,validate,transport=httpx.MockTransport(reply),api_key='offline-explicit')
-                await label({'text':'fixture'},{'ok':{'type':'noul','instructions':'Is this sufficient?'}},trace=trace,decide=decide)
+                await label({'text':'fixture'},{'ok':{'type':'noul','instructions':'Is this sufficient?'}},trace=trace,decide=decide,feedback=False)
             self.assertEqual(headers,['Bearer offline-explicit','Bearer offline-explicit'])
             self.assertNotIn('offline-explicit',(Path(tmp)/'events.jsonl').read_text())
 

@@ -38,7 +38,7 @@ async def main():
 asyncio.run(main())
 ```
 
-`label` is asynchronous and Jev-specific. You own the `Trace`; it saves the requests and full results. `result["views"]` contains both raw presentations, and `result["unscored_vent"]` contains their diagnostic vectors. Read `outputs/labels/run.md` before interpreting the means.
+`label` is asynchronous and Jev-specific. You own the `Trace`; it saves the requests and full results. `result["views"]` contains both raw presentations, and `result["unscored_vent"]` contains their diagnostic vectors. The first `label` call in a Trace also gets an unscored post-label interview in `result["feedback"]`, with a default $.05 observed-cost allowance. Later states do not repeat it. Set `feedback_budget=` to change the allowance, or `feedback=False` for an explicit caller budget/fixture. An injected decision client must provide `charged()` for interview cost accounting. Read `outputs/labels/run.md` before interpreting the means.
 
 All rubric questions share one state per call. The function also sends a second presentation with unordered Choice options reversed, to check option-order sensitivity. It does not reverse ordered Score levels. These are two views of the same input, not two independent examples.
 
@@ -105,7 +105,7 @@ To investigate saved Jev pair results:
 uv run llm-judge diagnose feedback --input outputs/judge/results.jsonl --budget .05
 ```
 
-The input must come from `compare --mode jev` or `--mode both`. The command defaults to the first pair; use `--id capital` to select another. The `compare --dev` shortcut instead interviews only the first pair's first presentation, not every dataset row.
+The input must come from `compare --mode jev` or `--mode both`. The command defaults to the first pair; use `--id capital` to select another. Normal `compare` runs already interview the first Jev pair's first presentation by default, not every dataset row; the legacy `--dev` flag merely makes this explicit. Set `--feedback-budget` to change its $.05 observed-cost allowance, or `--no-feedback` to skip it. Generative-only mode instead retains the judge's own unscored exit note, without silently adding Jev calls. Offline smokes do not call a live interview.
 
 The interview receives the original setup and actual returned answers. Following [jev-talks](https://github.com/zie1ony/jev-talks/tree/50bc6df463202f0b7f329077ea688ef97b9a473d), it shortlists words, asks separate Noul questions about appending, undoing or finishing, composes three candidate sentences, then self-grades distinct texts. The vocabulary's 3,000 English words are used here, not as one giant Choice question in normal judging.
 

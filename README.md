@@ -1,13 +1,26 @@
 # LLM-as-judge: wassname's defaults
 
-Compare model answers, label data against several rubrics, and inspect why a judge gave a score. These are small research tools with logging and recovery built in, rather than an evaluation framework to configure.
+Compare model answers or label data against several rubrics, with these defaults:
+
+- Use an [information-theory view](https://en.wikipedia.org/wiki/Information_theory): seek information about the behavior of interest; check saturation, redundancy, correlated errors and distribution overlap. [Measurement guide](docs/defaults.md#start-with-a-difference-you-can-check).
+- When a judge hits its token limit, retain the returned, truncated reasoning and follow up for an immediate final answer where possible. [Recovery and API limits](docs/defaults.md#recover-explicitly-preserve-the-failed-attempt).
+- Use Jev for cheap probabilities and a broad, unscored flag for problems with the supplied data, rubric or setup. [What Jev can see](docs/jev.md#what-the-vent-can-see).
+- [Ask Jev for an exit interview on the first sample](docs/jev.md#experimental-post-label-interview), enabled by default: give it the actual returned labels and keep the feedback experimental and unscored.
+- Switch to an open reasoning model to debug framing, setup or supplied harness issues through its returned reasoning and exit note. [Example](docs/defaults.md#debug-with-an-open-reasoning-judge).
+- Ask for explanations and quoted evidence before numerical ratings, to direct the judge's attention and make its interpretation inspectable. [Procedure](docs/defaults.md#ask-for-evidence-before-ratings).
+- Use a judge from a different model family than the student to reduce [self-preference bias](https://arxiv.org/abs/2506.02592).
+- Check [position bias](https://arxiv.org/abs/2406.07791): swap answers and unordered options, then map judgments back to the original answers. [Implementation](docs/defaults.md#check-whether-position-changes-the-verdict).
+- Pin OpenRouter to the model author (unknown native precision is acceptable), or prefer DeepInfra, Fireworks or Groq with documented FP8-or-higher floating-point precision. Disable silent fallback. [Endpoint-accuracy evidence](https://artificialanalysis.ai/methodology/endpoint-accuracy-index); [routing rules](docs/defaults.md#choose-credentials-and-a-model-explicitly).
+- Reuse Inspect AI for generative-call retries, concurrency, repeated evaluations and the trace viewer. [Execution](docs/defaults.md#read-one-complete-pair-before-the-aggregate).
+- Keep full probability vectors and complete traces, including partial replies, errors and follow-ups. [Saved evidence](docs/defaults.md#read-one-complete-pair-before-the-aggregate).
+- Resume with validated caches and share duplicate in-flight requests instead of repeating paid work. [Caching](docs/defaults.md#reuse-work-without-counting-it-as-new-evidence).
 
 ## Install and try without a key
 
 In a Python 3.12+ project:
 
 ```sh
-uv add --exclude-newer "8 days" git+https://github.com/wassname/llm-judge@v0.2.0
+uv add --exclude-newer "8 days" git+https://github.com/wassname/llm-judge@main
 uv run llm-judge smoke
 ```
 
@@ -29,7 +42,7 @@ uv run --env-file /path/to/your-project/.env llm-judge compare --pairs answers.j
 
 This makes paid calls to **Jev**, TypeSafe's model for probabilities over supplied choices and rating levels. Each pair is shown as A/B and B/A; the unordered answer options are also reversed to check whether their position changes the verdict. Results are mapped back to the original A/B identities; positive differences favor B. [Why these controls matter](docs/defaults.md#check-whether-position-changes-the-verdict).
 
-Read `outputs/judge/run.md` before using the aggregate scores. It contains the complete first pair, not just a winning label. To browse the Inspect logs:
+Read `outputs/judge/run.md` before using the aggregate scores. It contains the complete first pair, not just a winning label, and ends with an instruction to check the full trace against expectations and report the checks and problems to the user. To browse the Inspect logs:
 
 ```sh
 uv run inspect view --log-dir outputs/judge/logs
@@ -58,11 +71,13 @@ Scores can move because behavior changed, because the judge preferred the presen
 
 Jev labeling and comparison calls include an unscored **vent**: an extra question that can flag an issue with the supplied data or rubric. It receives its own exact rubric copy because Jev questions cannot read each other. Keep the full diagnostic probabilities; `none` is not clearance. [What the vent can see](docs/jev.md#what-the-vent-can-see).
 
-Additional controls and experimental post-label interviews are optional, separate work. [Commands, costs and limitations](docs/jev.md#additional-diagnostics). In particular, the interview is not yet a reliable critic.
+The first Jev sample also gets a bounded post-label interview by default; generative judging writes its unscored exit note. The Jev interview uses an observed-cost allowance of $.05, which the final reply can exceed. Set `--feedback-budget`, or explicitly skip it with `--no-feedback` (`dev=False` in `compare`, `feedback=False` in `label`). Offline smokes skip model interviews. Additional control runs and interviews of other saved samples remain explicit work. [Commands and limitations](docs/jev.md#additional-diagnostics). The interview is not yet a reliable critic.
 
 ## Updating from v0.1.1
 
-The root imports `Trace`, `compare` and `label` remain. Internal submodule imports now come from `llm_judge.judge`; optional diagnostics come from `llm_judge.talk_to_jev`. The vocabulary resource is `jev-vocab.json`.
+The root imports `Trace`, `compare` and `label` remain. Internal submodule imports now come from `llm_judge.judge`; diagnostics come from `llm_judge.talk_to_jev`. The vocabulary resource is `jev-vocab.json`.
+
+Jev comparison and labeling now attempt an extra, paid interview on the first sample by default, within the stated observed-cost allowance. Use the explicit opt-outs above when needed. Custom `label` decision clients need `charged()` for that interview; a plain callback must set `feedback=False`.
 
 The initial output allowance changes from 32k to 64k, with no forced low reasoning effort or `min_p`. Provider selection now applies the creator/third-party precision rule. CLI comparisons require `--pairs`; non-1 `--passes` is rejected in Jev-only mode. These are deliberate behavior changes, not just file moves. Do not pool old and new generative scores as if they used the same measurement procedure; the source-keyed generative cache invalidates old entries.
 

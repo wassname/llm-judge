@@ -200,6 +200,43 @@ class InspectPipeline(unittest.TestCase):
             self.assertEqual(len(generated), 16)
             self.assertEqual(len(typed), 8)
 
+    def test_invalid_generations_do_not_poison_a_later_valid_rerun(self):
+        with tempfile.TemporaryDirectory() as tmp, patch.dict(os.environ, {'INSPECT_CACHE_DIR':tmp+'/cache'}):
+            valid, calls = False, []
+            async def mock(messages, tools, tool_choice, config):
+                calls.append(len(messages))
+                result = rating(messages[0].text) if valid else {'invalid':True}
+                return ModelOutput.from_content('fixture/gen', json.dumps(result))
+            args = self.options(tmp)
+            args.mode, args.passes, args.parallel = 'gen', 1, 1
+            model = get_model('mockllm/model', custom_outputs=mock)
+            with self.assertRaises(ValueError):
+                evaluation.run(args, model=model)
+            first_calls = len(calls)
+            valid = True
+            result = evaluation.run(args, model=model)
+            self.assertEqual(result[0]['gen']['B_minus_A_preference'], -1)
+            self.assertEqual(len(calls)-first_calls, 4)
+            total_calls = len(calls)
+            evaluation.run(args, model=model)
+            self.assertEqual(len(calls), total_calls, 'valid results still replay at zero generation calls')
+            rejected = [r for r in runtime.records(args.output/'events.jsonl') if r['kind']=='invalid_generation_cache']
+            self.assertEqual(sum(r['removed'] for r in rejected), 2)
+
+    def test_direct_task_keeps_validation_error_without_global_trace(self):
+        with tempfile.TemporaryDirectory() as tmp, patch.dict(os.environ, {'INSPECT_CACHE_DIR':tmp+'/cache'}):
+            async def mock(messages, tools, tool_choice, config):
+                return ModelOutput.from_content('fixture/gen', '{"invalid":true}')
+            with runtime.Trace(Path(tmp)/'run') as trace, patch.object(runtime, 'TRACE', None), patch('inspect_ai._eval.context.init_dotenv', new=lambda: None):
+                model = get_model('mockllm/model', custom_outputs=mock)
+                task = evaluation.task([PAIR], 'gen', 1, 1, trace, VOCAB, evaluation.CRITERION, dev=False, model=model)
+                log = evaluation.inspect_eval(task, log_dir=tmp+'/logs', max_samples=1, display='none')[0]
+                self.assertEqual(log.status, 'error')
+                sample = next(s for s in log.samples if s.error is not None)
+                self.assertIn('PairJudgment', sample.error.message)
+                self.assertNotIn('NoneType', sample.error.message)
+                self.assertEqual(sum(r['removed'] for r in sample.metadata['cache_rejections']), 2)
+
     def test_dev_budget_stop_does_not_discard_valid_scores(self):
         with tempfile.TemporaryDirectory() as tmp, patch.dict(os.environ, {'OPENROUTER_API_KEY':'offline'}):
             count = 0
@@ -242,9 +279,10 @@ class InspectPipeline(unittest.TestCase):
                     answer['response_A']['quotes'] = ['invented quote']
                 return ModelOutput.from_content('fixture/gen', json.dumps(answer))
             args = self.options(tmp)
-            args.mode, args.passes, args.parallel = 'gen', 1, 1
+            args.mode, args.passes, args.parallel, args.dev = 'gen', 1, 1, True
             result = evaluation.run(args, model=get_model('mockllm/model', custom_outputs=mock))
             self.assertEqual(len(calls), 12)
+            self.assertNotIn('decision_request', (args.output/'events.jsonl').read_text())
             for messages, config in calls:
                 if len(messages) > 1:
                     self.assertEqual(config.extra_body['reasoning'], {'enabled':False})
