@@ -32,7 +32,7 @@ Inspect the first full trace and a seeded random sample, plus targeted disagreem
 
 ## Explicit credentials
 
-Select credentials in the calling environment (or pass an explicit key to `Decisions`). The paired runner disables Inspect's implicit `.env` lookup: otherwise the SDK searches parent directories and can select another project's configuration. This is a scoped guard on the pinned Inspect initialization hook, not a silent fallback. Offline checks use fixture credentials/transports and preserve the caller's environment.
+Select credentials in the calling environment (or pass an explicit key to `Decisions`). The paired runner disables Inspect's implicit `.env` lookup: otherwise the SDK searches parent directories and can select another project's configuration. This is a scoped guard on the pinned Inspect initialization hook, not a silent fallback. Offline checks use fixture credentials/transports and preserve the caller's environment. Inspect's evaluation context and this scoped hook are process-global; use separate processes for concurrent independent evaluations.
 
 ## Durable execution
 
