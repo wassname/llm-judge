@@ -1,0 +1,15 @@
+{
+  "source_gist": "https://gist.github.com/wassname/b7f76e42de131887c02d9e9835be80ef",
+  "last_published_gist_revision": "7db7353335ed0de6326d80bcdd38eb8468768d93",
+  "note": "Migrated restored local source, not only the reduced published gist. New entry points are documented in README.",
+  "source_sha256": {
+    "README.md": "d07245f7b41e44c01b45b131e1052f966be2de61e9c9452bf42378f81c73676c",
+    "evaluate.py": "e4c591f79e32901096e9029b65d30fc67b0b7b232e6e9f576c588060938855c1",
+    "judge_inspect.py": "5257dc96cb0531e962f825ec91c0d4ed2d9fe2fe8aab09394d614eafe18a2228",
+    "judge_jev.py": "b269aeb1f82ed1518a5e155cbb5f6d14f368ae2ea81df3022aa51cf933a357e4",
+    "judge_runtime.py": "8a526d4bd9caf1306dab958d513e890177d1063711782d02ed2eba75a058ae47",
+    "talk_to_jev.py": "f28431fd306afadb3ebee6a3a8988b523496c621de6a68b91bc3c7b3163ce073",
+    "vocabulary.json": "498e065012d4636ba7d0ad83b6dc3f4bf237c423767e1f9248df745b33956b63"
+  },
+  "author": "PI/OpenAI"
+}

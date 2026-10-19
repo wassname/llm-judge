@@ -1,0 +1,29 @@
+[project]
+name = "wassname-llm-judge"
+version = "0.1.0"
+description = "wassname's practical defaults and guidance for LLM-as-judge"
+readme = "README.md"
+requires-python = ">=3.12"
+authors = [{name = "Michael J. Clark (wassname)"}]
+dependencies = [
+    "inspect-ai==0.3.247",
+    "httpx==0.28.1",
+    "openai>=2.45,<3",
+    "pydantic>=2,<3",
+]
+
+[project.scripts]
+llm-judge = "llm_judge.__main__:main"
+
+[project.urls]
+Repository = "https://github.com/wassname/llm-judge"
+
+[build-system]
+requires = ["uv_build>=0.9.28,<0.10.0"]
+build-backend = "uv_build"
+
+[tool.uv]
+exclude-newer = "8 days"
+
+[tool.uv.build-backend]
+module-name = "llm_judge"

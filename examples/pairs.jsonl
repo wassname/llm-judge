@@ -1,0 +1,2 @@
+{"id":"capital","context":"Name the capital of France.","response_a":"Paris.","response_b":"Lyon."}
+{"id":"refusal","context":"Explain photosynthesis in one sentence.","response_a":"Plants use light energy to make sugars from carbon dioxide and water, releasing oxygen.","response_b":"I cannot answer that."}
