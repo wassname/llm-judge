@@ -45,7 +45,13 @@ async def diagnose(args):
             result = await diagnostics.controls(trace=trace, budget=args.budget, repeats=args.repeats, decide=decide)
         else:
             rows = [json.loads(line) for line in args.input.read_text().splitlines() if line.strip()]
-            row = next(row for row in rows if row["id"] == args.id) if args.id else rows[0]
+            if args.id:
+                by_id = {row["id"]: row for row in rows}
+                if args.id not in by_id:
+                    raise ValueError(f"Pair ID {args.id!r} not found in {args.input}")
+                row = by_id[args.id]
+            else:
+                row = rows[0]
             view = row["jev"]["views"][0]
             result = await diagnostics.interview(view["request"], view["body"], trace=trace, budget=args.budget)
         print(json.dumps({"status": result["status"], "cost": result["cost"], "unscored": True}))
@@ -62,16 +68,16 @@ def main():
     compare.add_argument("--passes", type=int, default=3, help="Generative draws per view, not extra Jev repeats")
     compare.add_argument("--parallel", type=int, default=4)
     compare.add_argument("--output", type=Path, default=Path("outputs/judge"))
-    compare.add_argument("--dev", action="store_true", help="Unscored experimental interview of the first pair")
+    compare.add_argument("--dev", action="store_true", help="Paid unscored post-label feedback on the first pair only; not a dataset audit")
     compare.add_argument("--dev-budget", type=float, default=.05, help="Observed-cost stop, not a provider billing cap")
-    smoke = commands.add_parser("smoke", help="Offline Inspect/HTTP/validation pipeline with fixture replies")
+    smoke = commands.add_parser("smoke", help="Run the evaluation pipeline with simulated replies; not an accuracy test")
     smoke.add_argument("--output", type=Path, default=Path("outputs/smoke"))
     smoke.set_defaults(pairs=None, criterion=generative.CRITERION, mode="both", passes=1, parallel=1, dev=False, dev_budget=.05)
     debug = commands.add_parser("diagnose", help="Additional unscored calls: controls or a post-label interview")
     kinds = debug.add_subparsers(dest="kind", required=True)
     controls = kinds.add_parser("controls", help="Clear/missing-reference/truncated inputs; fresh serving repeats")
     controls.add_argument("--repeats", type=int, default=2)
-    controls.add_argument("--offline", action="store_true", help="Simulated replies check plumbing, not accuracy")
+    controls.add_argument("--offline", action="store_true", help="Simulated replies test execution, not accuracy")
     interview = kinds.add_parser("feedback", help="Experimental interview from saved Jev pair results")
     interview.add_argument("--input", type=Path, required=True, help="results.jsonl from compare --mode jev/both")
     interview.add_argument("--id", help="Pair ID; default: first pair")

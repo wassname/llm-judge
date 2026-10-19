@@ -8,7 +8,7 @@ The [API reference](https://docs.typesafe.ai/api) says:
 
 > The `instructions` property can be a string, an object, or an array. You can break up a long question that has extra context, or data it needs to reference, into a structured object. Put the question in one field and the data in the others, and refer to the data fields by name in backticks, the same way you point a question at a nested `state` value:
 
-The request's `state`, question `instructions` and `criteria` can contain nested JSON, up to 64 levels. This is supplied context, not an arbitrary generative response schema. Native answers remain Noul (yes probability), Choice (category distribution, at most 255 options), or Score (expected value over 2–10 ordered levels). Question IDs are lookup keys; the docs say they are not sent to the underlying model.
+The request's `state`, question `instructions` and `criteria` can contain nested JSON, up to 64 levels. This is supplied context, not an arbitrary generative response schema. Native answers remain Noul (yes probability), Choice (category distribution, at most 255 options), or Score (expected value over 2–10 ordered levels). Noul may include optional `criteria.true`/`criteria.false` descriptions, or omit criteria entirely. Question IDs are lookup keys; the docs say they are not sent to the underlying model.
 
 For multiple traditions/virtues, ask independent rubric questions in one shared-state batch, then assemble `{tradition: {virtue: score}}` in Python. Several can apply together. JSON nesting itself does not save money; sharing state across questions can.
 

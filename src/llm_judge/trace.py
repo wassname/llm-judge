@@ -99,18 +99,19 @@ class Trace:
             os.fsync(stream.fileno())
 
     def sample(self, value):
+        value = {**value, "run_id": self.run_id}
         append(self.output / "samples.jsonl", value)
         if value["metadata"]["pair"]["id"] == self.first_id:
             self.markdown("First pair: complete sample (including cache hits and failures)", value)
 
 
 class Decisions:
-    def __init__(self, trace, validate, *, parallel=4, transport=None, sleep=asyncio.sleep):
+    def __init__(self, trace, validate, *, parallel=4, transport=None, sleep=asyncio.sleep, api_key=None):
         if parallel <= 0:
             raise ValueError("parallel must be positive")
         self.trace, self.validate = trace, validate
         self.parallel = asyncio.Semaphore(parallel)
-        self.transport, self.sleep = transport, sleep
+        self.transport, self.sleep, self.api_key = transport, sleep, api_key
         self.cache = {}
         for row in records(trace.output / "decisions_cache.jsonl"):
             if row["key"] != digest(row["request"]):
@@ -138,12 +139,19 @@ class Decisions:
         if owner:
             self.pending[key] = asyncio.create_task(self._fetch(key, request))
         # PI/OpenAI: Concurrent duplicates share a request, but only its initiating caller incurs the charge.
-        body = await self.pending[key]
-        return body, body["usage"]["cost"] if owner else 0.0
+        task = self.pending[key]
+        try:
+            body = await task
+            return body, body["usage"]["cost"] if owner else 0.0
+        finally:
+            # PI/OpenAI: Keep dedup only while in flight; a failed attempt must not poison an explicit retry.
+            if owner:
+                self.pending.pop(key)
 
     async def _fetch(self, key, request):
         async with self.parallel:
-            headers = {"Authorization": "Bearer " + os.environ["OPENROUTER_API_KEY"],
+            key_value = self.api_key if self.api_key is not None else os.environ["OPENROUTER_API_KEY"]
+            headers = {"Authorization": "Bearer " + key_value,
                        "HTTP-Referer": "https://github.com/wassname/llm-judge",
                        "X-OpenRouter-Title": "judge-example/decisions"}
             async with httpx.AsyncClient(headers=headers, transport=self.transport, timeout=180) as client:

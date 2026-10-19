@@ -91,6 +91,26 @@ class DurableDecisions(unittest.IsolatedAsyncioTestCase):
             self.assertIn('permanent body', (Path(tmp)/'events.jsonl').read_text())
             self.assertEqual(len(runtime.records(Path(tmp)/'decisions_cache.jsonl')), 1)
 
+    async def test_explicit_retry_after_exhaustion_is_not_a_cached_failure(self):
+        with tempfile.TemporaryDirectory() as tmp, patch.dict(os.environ, {'OPENROUTER_API_KEY':'offline'}):
+            count = 0
+            request = evaluation.jev_request(PAIR, 'AB', False, VOCAB, 'criterion')
+            async def no_wait(delay):
+                return None
+            def reply(sent):
+                nonlocal count
+                count += 1
+                return httpx.Response(429,text='rate limited') if count <= 6 else httpx.Response(200,json=body(request))
+            trace = runtime.Trace(Path(tmp))
+            decide = runtime.Decisions(trace,evaluation.validate,transport=httpx.MockTransport(reply),sleep=no_wait)
+            with self.assertRaises(httpx.HTTPStatusError):
+                await decide(request)
+            self.assertEqual(count,6)
+            result = await decide(request)
+            self.assertEqual(count,7)
+            self.assertEqual(result['model'],'fixture/jev')
+            self.assertEqual(decide.pending,{})
+
     async def test_torn_tail_preserved_bad_full_record_fails(self):
         with tempfile.TemporaryDirectory() as tmp:
             path = Path(tmp)/'events.jsonl'
@@ -157,11 +177,16 @@ class InspectPipeline(unittest.TestCase):
             self.assertEqual(result[0]['gen']['B_minus_A_preference'], -1)
             self.assertEqual(result[0]['jev']['B_minus_A_preference'], -1)
             self.assertEqual(result[0]['jev']['response_order_discrepancy'], 0)
+            first_run_id = json.loads((args.output/'status.json').read_text())['run_id']
             evaluation.run(args, transport=httpx.MockTransport(reply), model=model)
+            second_run_id = json.loads((args.output/'status.json').read_text())['run_id']
+            self.assertNotEqual(first_run_id,second_run_id)
             self.assertEqual(len(generated), 8, 'gen replay must make zero calls')
             self.assertEqual(len(typed), 4, 'Jev replay must make zero calls')
             samples = runtime.records(args.output/'samples.jsonl')
             self.assertEqual(len(samples), 16)
+            self.assertEqual({s['run_id'] for s in samples},{first_run_id,second_run_id})
+            self.assertEqual(sum(s['run_id'] == second_run_id for s in samples),8)
             self.assertEqual({s['epoch'] for s in samples}, {1,2})
             text = (args.output/'run.md').read_text()
             self.assertIn('First pair: complete sample', text)
@@ -229,6 +254,16 @@ class InspectPipeline(unittest.TestCase):
             self.assertIn('Validation failed', trace)
             self.assertIn('Compared the capital answers.', trace)
             self.assertEqual(result[0]['gen']['B_minus_A_quality'], -3)
+
+    def test_smoke_restores_environment_for_a_later_real_run(self):
+        from inspect_ai.model._cache import cache_path
+        with tempfile.TemporaryDirectory() as tmp, patch.dict(os.environ,{'OPENROUTER_API_KEY':'original-fixture-key','INSPECT_CACHE_DIR':tmp+'/original-cache'}):
+            args = self.options(tmp)
+            args.pairs = None
+            evaluation.smoke(args)
+            self.assertEqual(os.environ['OPENROUTER_API_KEY'],'original-fixture-key')
+            self.assertEqual(os.environ['INSPECT_CACHE_DIR'],tmp+'/original-cache')
+            self.assertEqual(cache_path(),Path(tmp)/'original-cache/generate')
 
     def test_provider_routing_raw_trace_and_reasoning_replay(self):
         from inspect_ai.model import ChatMessageUser, GenerateConfig

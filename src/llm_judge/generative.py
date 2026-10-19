@@ -1,7 +1,3 @@
-# /// script
-# requires-python = ">=3.12"
-# dependencies = ["inspect-ai==0.3.247", "loguru>=0.7,<0.8", "openai>=2.45,<3", "pydantic>=2,<3"]
-# ///
 """Evidence-producing pair judgments with Inspect traces. -- PI/OpenAI"""
 from __future__ import annotations
 

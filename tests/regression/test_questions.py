@@ -102,6 +102,30 @@ class Questions(unittest.IsolatedAsyncioTestCase):
                 self.assertEqual(body['usage']['cost'],.02,'raw provider usage must remain untouched')
                 self.assertEqual(len(calls),1)
 
+    async def test_injected_key_supports_offline_transport_without_environment_credentials(self):
+        with tempfile.TemporaryDirectory() as tmp, patch.dict(os.environ):
+            os.environ.pop('OPENROUTER_API_KEY',None)
+            headers = []
+            def reply(request):
+                headers.append(request.headers['Authorization'])
+                return httpx.Response(200,json=reply_body(json.loads(request.content)))
+            with Trace(tmp) as trace:
+                decide = Decisions(trace,validate,transport=httpx.MockTransport(reply),api_key='offline-explicit')
+                await label({'text':'fixture'},{'ok':{'type':'noul','instructions':'Is this sufficient?'}},trace=trace,decide=decide)
+            self.assertEqual(headers,['Bearer offline-explicit','Bearer offline-explicit'])
+            self.assertNotIn('offline-explicit',(Path(tmp)/'events.jsonl').read_text())
+
+    async def test_missing_cli_pair_id_fails_with_a_direct_message(self):
+        from argparse import Namespace
+        from llm_judge.__main__ import diagnose
+        with tempfile.TemporaryDirectory() as tmp:
+            source = Path(tmp)/'results.jsonl'
+            source.write_text('{"id":"existing"}\n')
+            args = Namespace(output=Path(tmp)/'debug',offline=False,kind='feedback',input=source,id='missing',budget=.01)
+            with self.assertRaisesRegex(ValueError,"Pair ID 'missing' not found"):
+                await diagnose(args)
+            self.assertEqual(json.loads((args.output/'status.json').read_text())['status'],'failed')
+
     async def test_control_budget_and_context_failure_preserve_evidence(self):
         with tempfile.TemporaryDirectory() as tmp, patch.dict(os.environ, {'OPENROUTER_API_KEY':'offline'}):
             def reply(request):

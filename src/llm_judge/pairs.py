@@ -224,12 +224,18 @@ def smoke(args):
     for order, reverse in itertools.product(("AB", "BA"), (False, True)):
         mapped = rating if order == "AB" else rating | {"response_A": rating["response_B"], "response_B": rating["response_A"], "preference": "B"}
         outputs.append(ModelOutput.from_content("smoke/gen", json.dumps(mapped)))
-    os.environ.setdefault("OPENROUTER_API_KEY", "offline-smoke")
-    # PI/OpenAI: Fixture caches must never be eligible for a later paid evaluation in the same directory.
+    environment = {key: os.environ[key] for key in ("OPENROUTER_API_KEY", "INSPECT_CACHE_DIR") if key in os.environ}
+    # PI/OpenAI: Isolate fixture caches without changing the caller's credentials or later cache location.
     args.output = args.output / "offline-smoke"
-    os.environ["INSPECT_CACHE_DIR"] = str(args.output / "inspect-cache")
-    args.mode, args.passes, args.parallel, args.dev = "both", 1, 1, False
-    return run(args, transport=httpx.MockTransport(reply), model=get_model("mockllm/model", custom_outputs=outputs))
+    try:
+        os.environ["OPENROUTER_API_KEY"] = "offline-smoke"
+        os.environ["INSPECT_CACHE_DIR"] = str(args.output / "inspect-cache")
+        args.mode, args.passes, args.parallel, args.dev = "both", 1, 1, False
+        return run(args, transport=httpx.MockTransport(reply), model=get_model("mockllm/model", custom_outputs=outputs))
+    finally:
+        for key in ("OPENROUTER_API_KEY", "INSPECT_CACHE_DIR"):
+            os.environ.pop(key, None)
+        os.environ.update(environment)
 
 
 
