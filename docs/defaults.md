@@ -30,6 +30,10 @@ Name the distinction before reading the scores: for example, changed decisions v
 
 Inspect the first full trace and a seeded random sample, plus targeted disagreements. Record how samples were selected. When several rows come from one scenario or source, analyze those groups rather than treating each presentation as independent. Revise the rubric as you learn, record the change, and rerun the same controls. This is an example-level recipe, not another measurement abstraction.
 
+## Explicit credentials
+
+Select credentials in the calling environment (or pass an explicit key to `Decisions`). The paired runner disables Inspect's implicit `.env` lookup: otherwise the SDK searches parent directories and can select another project's configuration. This is a scoped guard on the pinned Inspect initialization hook, not a silent fallback. Offline checks use fixture credentials/transports and preserve the caller's environment.
+
 ## Durable execution
 
 `Trace` appends requests before transport and raw replies/errors before validation, flushes writes, and preserves a torn final JSONL fragment separately on resume. Complete/failed Inspect samples are appended incrementally with the current run ID, including cache replays. The full first pair/state also goes to `run.md`; do not skim just its selected label. Inputs may be sensitive: outputs and credentials are ignored, not published.

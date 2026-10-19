@@ -1,6 +1,6 @@
 [project]
 name = "wassname-llm-judge"
-version = "0.1.0"
+version = "0.1.1"
 description = "wassname's practical defaults and guidance for LLM-as-judge"
 readme = "README.md"
 requires-python = ">=3.12"

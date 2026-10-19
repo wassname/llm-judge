@@ -9,6 +9,7 @@ import math
 import os
 import statistics
 from pathlib import Path
+from unittest.mock import patch
 
 from inspect_ai import Epochs, Task, eval as inspect_eval
 from inspect_ai.hooks import Hooks, hooks
@@ -188,7 +189,9 @@ def run(args, *, pairs=None, transport=None, model=None):
         trace.markdown("Configuration and expected distinctions", {"criterion": args.criterion, "mode": args.mode, "passes": args.passes,
                        "parallel": args.parallel, "gen_model": gen.MODEL_ID, "jev_model": JEV, "provider": gen.PROVIDER,
                        "expectation": "Identical responses should tie; switching response/option order should not change mapped judgments. Inspect deviations."})
-        logs = inspect_eval(evaluation, log_dir=str(args.output / "logs"), log_model_api=True, max_samples=args.parallel, display="none")
+        # PI/OpenAI: Pinned Inspect searches parent .env files; require explicit credential selection instead.
+        with patch("inspect_ai._eval.context.init_dotenv", new=lambda: None):
+            logs = inspect_eval(evaluation, log_dir=str(args.output / "logs"), log_model_api=True, max_samples=args.parallel, display="none")
         results = summarize(logs[0], pairs, args.mode, args.passes, trace)
         trace.status("success", results="results.jsonl", eval=logs[0].location)
         return results

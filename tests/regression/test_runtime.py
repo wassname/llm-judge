@@ -1,6 +1,7 @@
 """Maintain runtime safeguards through production Inspect and HTTP paths. -- PI/OpenAI"""
 import argparse
 import asyncio
+import contextlib
 import json
 import os
 from pathlib import Path
@@ -254,6 +255,25 @@ class InspectPipeline(unittest.TestCase):
             self.assertIn('Validation failed', trace)
             self.assertIn('Compared the capital answers.', trace)
             self.assertEqual(result[0]['gen']['B_minus_A_quality'], -3)
+
+    def test_inspect_never_searches_unselected_project_env_files(self):
+        from inspect_ai._util.dotenv import find_dotenv
+        with tempfile.TemporaryDirectory() as tmp, patch.dict(os.environ,{'OPENROUTER_API_KEY':'explicit-fixture','INSPECT_CACHE_DIR':tmp+'/cache'}):
+            project = Path(tmp)/'unselected-project'
+            project.mkdir()
+            (project/'.env').write_text('UNSELECTED_PROJECT_DOTENV_MARKER=must-not-load\nOPENROUTER_API_KEY=wrong-fixture\n')
+            os.environ.pop('UNSELECTED_PROJECT_DOTENV_MARKER',None)
+            args = self.options(tmp)
+            args.mode, args.passes, args.parallel = 'jev', 1, 1
+            headers = []
+            def reply(request):
+                headers.append(request.headers['Authorization'])
+                return httpx.Response(200,json=body(json.loads(request.content)))
+            with contextlib.chdir(project), patch('inspect_ai._util.dotenv.find_dotenv',wraps=find_dotenv) as search:
+                evaluation.run(args,transport=httpx.MockTransport(reply))
+            self.assertFalse('UNSELECTED_PROJECT_DOTENV_MARKER' in os.environ,'SDK loaded an unselected .env file')
+            self.assertEqual(search.call_count,0,'the SDK must not even search for a project key file')
+            self.assertTrue(all(header == 'Bearer explicit-fixture' for header in headers))
 
     def test_smoke_restores_environment_for_a_later_real_run(self):
         from inspect_ai.model._cache import cache_path
