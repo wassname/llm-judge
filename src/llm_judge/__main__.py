@@ -2,7 +2,6 @@
 import argparse
 import asyncio
 import json
-import os
 from pathlib import Path
 
 from . import diagnostics, generative, pairs
@@ -34,12 +33,11 @@ async def diagnose(args):
     output = args.output
     if args.offline:
         output = output / "offline-controls"
-        os.environ["OPENROUTER_API_KEY"] = "offline-fixture"
     with Trace(output) as trace:
         if args.kind == "controls":
             if args.offline:
                 import httpx
-                decide = Decisions(trace, validate, transport=httpx.MockTransport(_offline_decisions))
+                decide = Decisions(trace, validate, transport=httpx.MockTransport(_offline_decisions), api_key="offline-fixture")
             else:
                 decide = None
             result = await diagnostics.controls(trace=trace, budget=args.budget, repeats=args.repeats, decide=decide)

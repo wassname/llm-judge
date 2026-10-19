@@ -5,13 +5,13 @@ Practical defaults and guidance for research agents: compare model outputs, labe
 ## Install and try
 
 ```sh
-uv add git+https://github.com/wassname/llm-judge@v0.1.0
+uv add --exclude-newer "8 days" git+https://github.com/wassname/llm-judge@v0.1.0
 # Or clone, then: uv sync --locked
 uv run llm-judge smoke                         # offline execution check, not an accuracy test
 uv run llm-judge diagnose controls --offline --budget .01
 ```
 
-To work from a clone, run `git clone https://github.com/wassname/llm-judge`, `cd llm-judge`, then `uv sync --locked`.
+To work from a clone, run `git clone https://github.com/wassname/llm-judge`, `cd llm-judge`, then `uv sync --locked`. Keep a release-age policy in the consuming project too: a dependency's `[tool.uv]` settings do not carry over. The install command applies the eight-day hold to that resolution; keep any stricter existing policy.
 
 Paid calls use `OPENROUTER_API_KEY` from your own environment. Neither smoke command reads a project's key file. Run logs and caches stay local.
 

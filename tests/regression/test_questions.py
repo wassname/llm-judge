@@ -115,6 +115,15 @@ class Questions(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(headers,['Bearer offline-explicit','Bearer offline-explicit'])
             self.assertNotIn('offline-explicit',(Path(tmp)/'events.jsonl').read_text())
 
+    async def test_offline_controls_preserve_caller_credentials(self):
+        from argparse import Namespace
+        from llm_judge.__main__ import diagnose
+        with tempfile.TemporaryDirectory() as tmp, patch.dict(os.environ,{'OPENROUTER_API_KEY':'caller-fixture-key'}):
+            args = Namespace(output=Path(tmp),offline=True,kind='controls',budget=.01,repeats=2)
+            await diagnose(args)
+            self.assertEqual(os.environ['OPENROUTER_API_KEY'],'caller-fixture-key')
+            self.assertNotIn('caller-fixture-key',(Path(tmp)/'offline-controls/events.jsonl').read_text())
+
     async def test_missing_cli_pair_id_fails_with_a_direct_message(self):
         from argparse import Namespace
         from llm_judge.__main__ import diagnose
