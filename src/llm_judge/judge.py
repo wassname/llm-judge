@@ -50,7 +50,11 @@ FLOAT_PRECISIONS = {"fp8", "mxfp8", "fp16", "bf16", "fp32"}
 PREFERRED_HOSTS = ("DeepInfra", "Fireworks", "Groq")
 MODEL_ID = "deepseek/deepseek-v4.1-flash"
 MODEL = f"judge-openrouter/{MODEL_ID}"
-MAX_TOKENS = 64000
+
+# note models can take 30k tokens per difficult task, esp small / flash models that make up for small size with test time compute. 
+# That said we may not want to pay for 64_000 so this can be adjusted down, and the stop and answer now patten can be used to still get an answer
+MAX_TOKENS = 64000 
+
 READ_LOG_INSTRUCTION = (
     "LLM: Read the full log and complete first-sample trace, check behavior against the stated expectations, "
     "and tell the user what you checked, what passed or failed, and what remains uncertain."
